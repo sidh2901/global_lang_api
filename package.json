@@ -1,7 +1,7 @@
 {
   "name": "webrtc_practice",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development nodemon server.js"
