@@ -1,0 +1,14 @@
+:root { --bg:#0b1020; --card:#121935; --text:#e8ecff; --muted:#9bb0ff; }
+*{box-sizing:border-box} body{margin:0;padding:24px;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,Segoe UI,Roboto}
+.card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);max-width:900px;margin:0 auto}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+button{border:0;border-radius:12px;padding:10px 14px;cursor:pointer}
+.btn{background:#3b82f6;color:white}
+.btn.secondary{background:#334155;color:#cbd5e1}
+input,select{background:#0f172a;color:#e5e7eb;border:1px solid #334155;border-radius:10px;padding:10px;min-width:220px}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#1e293b;color:#cbd5e1;font-size:12px}
+.list{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:10px}
+.item{background:#0f172a;border:1px solid #1f2a44;border-radius:12px;padding:12px}
+.hint{color:var(--muted);font-size:13px}
+hr{border:0;border-top:1px solid #24324f;margin:14px 0}
+.audio{margin-top:10px}
