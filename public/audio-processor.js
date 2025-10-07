@@ -3,17 +3,19 @@ class AudioProcessor {
     this.mediaRecorder = null;
     this.audioChunks = [];
     this.isRecording = false;
-    this.recordingInterval = 4000;
-    this.silenceThreshold = -40;
+    this.recordingInterval = 2500;
+    this.silenceThreshold = -50;
     this.audioContext = null;
     this.analyser = null;
     this.source = null;
     this.silenceDetectionInterval = null;
     this.consecutiveSilenceCount = 0;
-    this.requiredSilenceCount = 3;
+    this.requiredSilenceCount = 5;
     this.isSpeaking = false;
     this.lastSpeechTime = 0;
-    this.debounceDelay = 800;
+    this.debounceDelay = 500;
+    this.minAudioSize = 8000;
+    this.speechStartThreshold = -45;
   }
 
   async startRecording(stream, onChunkReady) {
@@ -56,8 +58,10 @@ class AudioProcessor {
           const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
           this.audioChunks = [];
 
-          if (audioBlob.size > 3000) {
+          if (audioBlob.size > this.minAudioSize) {
             await onChunkReady(audioBlob);
+          } else {
+            console.log('[AudioProcessor] Audio chunk too small:', audioBlob.size, 'bytes - skipping');
           }
         }
 
@@ -89,11 +93,11 @@ class AudioProcessor {
       const audioLevel = this.getAudioLevel();
       const currentTime = Date.now();
 
-      if (audioLevel > this.silenceThreshold) {
+      if (audioLevel > this.speechStartThreshold) {
         this.consecutiveSilenceCount = 0;
         this.isSpeaking = true;
         this.lastSpeechTime = currentTime;
-      } else {
+      } else if (audioLevel < this.silenceThreshold) {
         if (this.isSpeaking) {
           this.consecutiveSilenceCount++;
         }
@@ -109,7 +113,7 @@ class AudioProcessor {
           this.mediaRecorder.stop();
         }
       }
-    }, 200);
+    }, 150);
   }
 
   stopRecording() {
@@ -152,13 +156,26 @@ class TranslationEngine {
     this.isProcessing = false;
     this.processingQueue = [];
     this.lastProcessedText = '';
-    this.minTextLength = 3;
+    this.minTextLength = 5;
+    this.recentTranscriptions = [];
+    this.maxRecentTranscriptions = 5;
+    this.lastProcessTime = 0;
+    this.minProcessInterval = 1000;
+    this.mediaBlacklist = [
+      'mbc news', 'cnn', 'bbc', 'fox news', 'breaking news', 'live report',
+      'reporter', 'correspondent', 'broadcasting', 'anchor', 'newsroom',
+      'weather report', 'traffic update', 'sports update', 'commercial break',
+      'stay tuned', 'coming up next', 'brought to you by'
+    ];
   }
 
   async transcribe(audioBlob) {
     try {
       const formData = new FormData();
       formData.append('audio', audioBlob);
+
+      const languageCode = this.getLanguageCode(this.myLanguage);
+      formData.append('language', languageCode);
 
       const response = await fetch('/api/stt', {
         method: 'POST',
@@ -175,6 +192,24 @@ class TranslationEngine {
       console.error('Transcription error:', error);
       return '';
     }
+  }
+
+  getLanguageCode(language) {
+    const languageMap = {
+      'English': 'en',
+      'Spanish': 'es',
+      'French': 'fr',
+      'German': 'de',
+      'Italian': 'it',
+      'Portuguese': 'pt',
+      'Russian': 'ru',
+      'Japanese': 'ja',
+      'Korean': 'ko',
+      'Chinese': 'zh',
+      'Arabic': 'ar',
+      'Hindi': 'hi'
+    };
+    return languageMap[language] || 'en';
   }
 
   async translate(text, targetLanguage) {
@@ -246,17 +281,35 @@ class TranslationEngine {
       }
 
       const normalizedText = transcribed.toLowerCase().trim();
-      const fillerWords = ['um', 'uh', 'hmm', 'ah', 'er', 'like', 'you know', 'thank you', 'thanks'];
 
-      if (fillerWords.some(filler => normalizedText === filler || normalizedText.length < 5)) {
+      if (this.containsMediaContent(normalizedText)) {
+        console.log('[TranslationEngine] Media/broadcast content detected, skipping:', transcribed);
+        this.isProcessing = false;
+        this.processNextInQueue();
+        return { original: '', translated: '', audioBlob: null };
+      }
+
+      const fillerWords = ['um', 'uh', 'hmm', 'ah', 'er', 'like', 'you know'];
+      const repetitiveWords = ['thank you', 'thanks', 'hello', 'hi', 'hey', 'okay', 'ok', 'yes', 'no', 'yeah'];
+
+      if (fillerWords.some(filler => normalizedText === filler) || normalizedText.length < this.minTextLength) {
         console.log('[TranslationEngine] Filler word or very short text detected, skipping');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
       }
 
-      if (normalizedText === this.lastProcessedText.toLowerCase()) {
-        console.log('[TranslationEngine] Duplicate text, skipping');
+      if (this.isDuplicateOrRecent(normalizedText)) {
+        console.log('[TranslationEngine] Duplicate or recently processed text, skipping');
+        this.isProcessing = false;
+        this.processNextInQueue();
+        return { original: '', translated: '', audioBlob: null };
+      }
+
+      const currentTime = Date.now();
+      if (currentTime - this.lastProcessTime < this.minProcessInterval &&
+          repetitiveWords.some(word => normalizedText === word)) {
+        console.log('[TranslationEngine] Repetitive greeting/acknowledgment too soon, skipping');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
@@ -271,6 +324,8 @@ class TranslationEngine {
       console.log('[TranslationEngine] Audio blob created:', translatedAudioBlob ? 'success' : 'failed');
 
       this.lastProcessedText = transcribed;
+      this.lastProcessTime = Date.now();
+      this.addToRecentTranscriptions(normalizedText);
       this.isProcessing = false;
       this.processNextInQueue();
       return { original: transcribed, translated, audioBlob: translatedAudioBlob };
@@ -305,6 +360,45 @@ class TranslationEngine {
     this.myLanguage = myLanguage;
     this.remoteLanguage = remoteLanguage;
     this.enableTranslation = enableTranslation;
+  }
+
+  containsMediaContent(text) {
+    return this.mediaBlacklist.some(phrase => text.includes(phrase.toLowerCase()));
+  }
+
+  isDuplicateOrRecent(normalizedText) {
+    if (normalizedText === this.lastProcessedText.toLowerCase()) {
+      return true;
+    }
+
+    return this.recentTranscriptions.some(recent => {
+      const similarity = this.calculateSimilarity(normalizedText, recent);
+      return similarity > 0.8;
+    });
+  }
+
+  calculateSimilarity(str1, str2) {
+    if (str1 === str2) return 1.0;
+    if (str1.length === 0 || str2.length === 0) return 0.0;
+
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+
+    if (longer.includes(shorter)) return 0.85;
+
+    const words1 = str1.split(' ');
+    const words2 = str2.split(' ');
+    const commonWords = words1.filter(word => words2.includes(word));
+    const similarity = (commonWords.length * 2) / (words1.length + words2.length);
+
+    return similarity;
+  }
+
+  addToRecentTranscriptions(text) {
+    this.recentTranscriptions.push(text);
+    if (this.recentTranscriptions.length > this.maxRecentTranscriptions) {
+      this.recentTranscriptions.shift();
+    }
   }
 }
 
