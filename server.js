@@ -86,7 +86,7 @@ app.post('/api/translate', async (req, res) => {
     }
 
     const chat = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5',
       temperature: 0.2,
       messages: [
         {
