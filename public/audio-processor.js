@@ -3,19 +3,20 @@ class AudioProcessor {
     this.mediaRecorder = null;
     this.audioChunks = [];
     this.isRecording = false;
-    this.recordingInterval = 2500;
-    this.silenceThreshold = -50;
+    this.recordingInterval = 3000;
+    this.silenceThreshold = -55;
     this.audioContext = null;
     this.analyser = null;
     this.source = null;
     this.silenceDetectionInterval = null;
     this.consecutiveSilenceCount = 0;
-    this.requiredSilenceCount = 5;
+    this.requiredSilenceCount = 8;
     this.isSpeaking = false;
     this.lastSpeechTime = 0;
-    this.debounceDelay = 500;
-    this.minAudioSize = 8000;
-    this.speechStartThreshold = -45;
+    this.debounceDelay = 700;
+    this.minAudioSize = 5000;
+    this.speechStartThreshold = -48;
+    this.hasDetectedSpeech = false;
   }
 
   async startRecording(stream, onChunkReady) {
@@ -50,18 +51,23 @@ class AudioProcessor {
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           this.audioChunks.push(event.data);
+          console.log('[AudioProcessor] Audio chunk received:', event.data.size, 'bytes');
         }
       };
 
       this.mediaRecorder.onstop = async () => {
         if (this.audioChunks.length > 0) {
           const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+          console.log('[AudioProcessor] Recording stopped. Total audio size:', audioBlob.size, 'bytes');
           this.audioChunks = [];
 
-          if (audioBlob.size > this.minAudioSize) {
+          if (audioBlob.size > this.minAudioSize && this.hasDetectedSpeech) {
+            console.log('[AudioProcessor] Processing audio chunk');
             await onChunkReady(audioBlob);
+            this.hasDetectedSpeech = false;
           } else {
-            console.log('[AudioProcessor] Audio chunk too small:', audioBlob.size, 'bytes - skipping');
+            console.log('[AudioProcessor] Audio chunk skipped - size:', audioBlob.size, 'bytes, hadSpeech:', this.hasDetectedSpeech);
+            this.hasDetectedSpeech = false;
           }
         }
 
@@ -95,7 +101,11 @@ class AudioProcessor {
 
       if (audioLevel > this.speechStartThreshold) {
         this.consecutiveSilenceCount = 0;
+        if (!this.isSpeaking) {
+          console.log('[AudioProcessor] Speech detected! Level:', audioLevel.toFixed(2), 'dB');
+        }
         this.isSpeaking = true;
+        this.hasDetectedSpeech = true;
         this.lastSpeechTime = currentTime;
       } else if (audioLevel < this.silenceThreshold) {
         if (this.isSpeaking) {
@@ -106,6 +116,7 @@ class AudioProcessor {
       if (this.isSpeaking &&
           this.consecutiveSilenceCount >= this.requiredSilenceCount &&
           currentTime - this.lastSpeechTime >= this.debounceDelay) {
+        console.log('[AudioProcessor] Silence detected, stopping recording');
         this.isSpeaking = false;
         this.consecutiveSilenceCount = 0;
 
@@ -177,19 +188,23 @@ class TranslationEngine {
       const languageCode = this.getLanguageCode(this.myLanguage);
       formData.append('language', languageCode);
 
+      console.log('[TranslationEngine] Sending to STT API, language:', languageCode);
+
       const response = await fetch('/api/stt', {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('STT request failed');
+        throw new Error('STT request failed with status: ' + response.status);
       }
 
       const data = await response.json();
+      console.log('[TranslationEngine] STT API response:', data);
       return data.text || '';
     } catch (error) {
       console.error('Transcription error:', error);
+      this.logToScreen('❌ Transcription API error: ' + error.message, 'error');
       return '';
     }
   }
@@ -254,14 +269,17 @@ class TranslationEngine {
 
   async processOutgoingAudio(audioBlob) {
     console.log('[TranslationEngine] Processing audio, enabled:', this.enableTranslation, 'myLang:', this.myLanguage, 'remoteLang:', this.remoteLanguage);
+    this.logToScreen('⏳ Received audio blob (' + audioBlob.size + ' bytes)', 'info');
 
     if (!this.enableTranslation || this.myLanguage === this.remoteLanguage) {
       console.log('[TranslationEngine] Translation skipped - disabled or same language');
+      this.logToScreen('⚠️ Translation disabled or same language', 'warning');
       return { original: '', translated: '', audioBlob: null };
     }
 
     if (this.isProcessing) {
       console.log('[TranslationEngine] Already processing, queuing');
+      this.logToScreen('⌛ Queued (processing in progress)', 'info');
       this.processingQueue.push(audioBlob);
       return { original: '', translated: '', audioBlob: null };
     }
@@ -270,11 +288,14 @@ class TranslationEngine {
 
     try {
       console.log('[TranslationEngine] Step 1: Transcribing audio...');
+      this.logToScreen('🎤 Processing audio...', 'info');
       const transcribed = await this.transcribe(audioBlob);
       console.log('[TranslationEngine] Transcribed:', transcribed);
+      this.logToScreen('📝 Transcribed: ' + transcribed, 'transcription');
 
-      if (!transcribed || transcribed.trim().length < this.minTextLength) {
-        console.log('[TranslationEngine] Text too short or empty, skipping');
+      if (!transcribed || transcribed.trim().length === 0) {
+        console.log('[TranslationEngine] No transcription received');
+        this.logToScreen('⚠️ No speech detected in audio', 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
@@ -284,16 +305,17 @@ class TranslationEngine {
 
       if (this.containsMediaContent(normalizedText)) {
         console.log('[TranslationEngine] Media/broadcast content detected, skipping:', transcribed);
+        this.logToScreen('⚠️ FILTERED (Media Content): ' + transcribed, 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
       }
 
-      const fillerWords = ['um', 'uh', 'hmm', 'ah', 'er', 'like', 'you know'];
-      const repetitiveWords = ['thank you', 'thanks', 'hello', 'hi', 'hey', 'okay', 'ok', 'yes', 'no', 'yeah'];
+      const fillerWords = ['um', 'uh', 'hmm', 'ah', 'er'];
 
-      if (fillerWords.some(filler => normalizedText === filler) || normalizedText.length < this.minTextLength) {
+      if (fillerWords.some(filler => normalizedText === filler) || normalizedText.length < 2) {
         console.log('[TranslationEngine] Filler word or very short text detected, skipping');
+        this.logToScreen('⚠️ FILTERED (Too Short/Filler): ' + transcribed, 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
@@ -301,27 +323,25 @@ class TranslationEngine {
 
       if (this.isDuplicateOrRecent(normalizedText)) {
         console.log('[TranslationEngine] Duplicate or recently processed text, skipping');
-        this.isProcessing = false;
-        this.processNextInQueue();
-        return { original: '', translated: '', audioBlob: null };
-      }
-
-      const currentTime = Date.now();
-      if (currentTime - this.lastProcessTime < this.minProcessInterval &&
-          repetitiveWords.some(word => normalizedText === word)) {
-        console.log('[TranslationEngine] Repetitive greeting/acknowledgment too soon, skipping');
+        this.logToScreen('⚠️ FILTERED (Duplicate): ' + transcribed, 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
       }
 
       console.log('[TranslationEngine] Step 2: Translating to', this.remoteLanguage);
+      this.logToScreen('🔄 Translating to ' + this.remoteLanguage + '...', 'info');
       const translated = await this.translate(transcribed, this.remoteLanguage);
       console.log('[TranslationEngine] Translated:', translated);
+      this.logToScreen('✅ Translated: ' + translated, 'translation');
 
       console.log('[TranslationEngine] Step 3: Synthesizing speech...');
+      this.logToScreen('🔊 Synthesizing speech...', 'info');
       const translatedAudioBlob = await this.synthesizeSpeech(translated);
       console.log('[TranslationEngine] Audio blob created:', translatedAudioBlob ? 'success' : 'failed');
+      if (translatedAudioBlob) {
+        this.logToScreen('✅ Audio ready for playback', 'success');
+      }
 
       this.lastProcessedText = transcribed;
       this.lastProcessTime = Date.now();
@@ -331,6 +351,7 @@ class TranslationEngine {
       return { original: transcribed, translated, audioBlob: translatedAudioBlob };
     } catch (error) {
       console.error('[TranslationEngine] Error processing outgoing audio:', error);
+      this.logToScreen('❌ Error: ' + error.message, 'error');
       this.isProcessing = false;
       this.processNextInQueue();
       return { original: '', translated: '', audioBlob: null };
@@ -399,6 +420,58 @@ class TranslationEngine {
     if (this.recentTranscriptions.length > this.maxRecentTranscriptions) {
       this.recentTranscriptions.shift();
     }
+  }
+
+  logToScreen(message, type = 'info') {
+    const logDiv = document.getElementById('transcriptionLogs');
+    if (!logDiv) return;
+
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = document.createElement('div');
+
+    let borderColor = '#475569';
+    let bgColor = '#1e293b';
+    let textColor = '#cbd5e1';
+
+    switch(type) {
+      case 'transcription':
+        borderColor = '#3b82f6';
+        bgColor = 'rgba(59, 130, 246, 0.1)';
+        textColor = '#93c5fd';
+        break;
+      case 'translation':
+        borderColor = '#10b981';
+        bgColor = 'rgba(16, 185, 129, 0.1)';
+        textColor = '#6ee7b7';
+        break;
+      case 'warning':
+        borderColor = '#f59e0b';
+        bgColor = 'rgba(245, 158, 11, 0.1)';
+        textColor = '#fbbf24';
+        break;
+      case 'error':
+        borderColor = '#ef4444';
+        bgColor = 'rgba(239, 68, 68, 0.1)';
+        textColor = '#fca5a5';
+        break;
+      case 'success':
+        borderColor = '#10b981';
+        bgColor = 'rgba(16, 185, 129, 0.15)';
+        textColor = '#6ee7b7';
+        break;
+      default:
+        borderColor = '#475569';
+        bgColor = '#1e293b';
+        textColor = '#94a3b8';
+    }
+
+    logEntry.style.borderLeftColor = borderColor;
+    logEntry.style.background = bgColor;
+    logEntry.style.color = textColor;
+
+    logEntry.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
+    logDiv.appendChild(logEntry);
+    logDiv.scrollTop = logDiv.scrollHeight;
   }
 }
 

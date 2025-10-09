@@ -7,7 +7,7 @@
 </head>
 <body>
 <div class="card">
-<h2>Caller Console</h2>
+<h2>📞 Caller Console</h2>
 <div class="row">
 <input id="callerName" placeholder="Your name" />
 <select id="callerLanguage">
@@ -46,9 +46,13 @@
 <div class="hint">Agents shown are currently online and available.</div>
 <hr />
 <div id="status">Idle.</div>
-<div id="translationStatus" style="margin-top: 10px; font-size: 12px; color: #666;"></div>
+<div id="translationStatus"></div>
+<div class="logs-container">
+<h3>Live Transcription Logs</h3>
+<div id="transcriptionLogs"></div>
+</div>
 <div class="audio">
-<div class="hint">Remote audio will play here when connected:</div>
+<div class="hint">Remote audio will play here when connected</div>
 <audio id="remoteAudio" autoplay playsinline></audio>
 <audio id="callerRingtone" src="/sounds/ringtone.mp3" loop></audio>
 </div>

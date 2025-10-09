@@ -56,17 +56,20 @@ app.get('/api/debug/agents', (_req, res) => res.json(currentAgents()));
 // === OpenAI API Routes ===
 
 // Speech-to-Text endpoint
+// add: const language = req.body?.language;  // multer puts fields into req.body
 app.post('/api/stt', upload.single('audio'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No audio file provided' });
-    }
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
 
     const file = new File([req.file.buffer], 'audio.webm', { type: req.file.mimetype || 'audio/webm' });
+    const language = (req.body?.language || '').trim() || undefined; // e.g., 'hi', 'es', 'mr', etc.
 
     const result = await openai.audio.transcriptions.create({
       model: 'whisper-1',
       file,
+      language,               // <— HINT: improves accuracy/retention a lot
+      temperature: 0,         // less creative, more literal
+      prompt: 'Conversational phone call audio; transcribe clearly with punctuation.',
     });
 
     res.json({ text: result.text || '' });
@@ -75,6 +78,7 @@ app.post('/api/stt', upload.single('audio'), async (req, res) => {
     res.status(500).json({ error: 'STT failed' });
   }
 });
+
 
 // Translation endpoint
 app.post('/api/translate', async (req, res) => {

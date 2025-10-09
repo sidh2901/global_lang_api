@@ -7,7 +7,7 @@
 </head>
 <body>
 <div class="card">
-<h2>Agent Console</h2>
+<h2>🎧 Agent Console</h2>
 <div class="row">
 <input id="agentName" placeholder="Your display name" />
 <select id="agentLanguage">
@@ -47,7 +47,11 @@
 <div>
 <h3>Incoming Call</h3>
 <div id="incoming">No calls yet.</div>
-<div id="translationStatus" style="margin-top: 10px; font-size: 12px; color: #666;"></div>
+<div id="translationStatus"></div>
+<div class="logs-container">
+<h4>Live Transcription Logs</h4>
+<div id="transcriptionLogs"></div>
+</div>
 <div class="row">
 <button id="acceptBtn" class="btn" disabled>Accept</button>
 <button id="declineBtn" class="btn secondary" disabled>Decline</button>
@@ -59,7 +63,7 @@
   <button id="hangupBtn" class="btn secondary" disabled>Hang Up</button>
 </div>
 <div class="audio">
-<div class="hint">Remote audio will play here when connected:</div>
+<div class="hint">Remote audio will play here when connected</div>
 <audio id="remoteAudio" autoplay playsinline></audio>
 <audio id="agentRingtone" src="/sounds/ringtone.mp3" loop></audio>
 </div>

@@ -49,6 +49,48 @@ function updateTranslationStatus(message) {
   translationStatusDiv.textContent = message;
 }
 
+function logToTranscriptionLogs(message, type = 'info') {
+  const logDiv = document.getElementById('transcriptionLogs');
+  if (!logDiv) return;
+
+  const timestamp = new Date().toLocaleTimeString();
+  const logEntry = document.createElement('div');
+
+  let borderColor = '#475569';
+  let bgColor = '#1e293b';
+  let textColor = '#cbd5e1';
+
+  switch(type) {
+    case 'transcription':
+      borderColor = '#3b82f6';
+      bgColor = 'rgba(59, 130, 246, 0.1)';
+      textColor = '#93c5fd';
+      break;
+    case 'translation':
+      borderColor = '#10b981';
+      bgColor = 'rgba(16, 185, 129, 0.1)';
+      textColor = '#6ee7b7';
+      break;
+    case 'remote':
+      borderColor = '#f59e0b';
+      bgColor = 'rgba(245, 158, 11, 0.1)';
+      textColor = '#fbbf24';
+      break;
+    default:
+      borderColor = '#475569';
+      bgColor = '#1e293b';
+      textColor = '#94a3b8';
+  }
+
+  logEntry.style.borderLeftColor = borderColor;
+  logEntry.style.background = bgColor;
+  logEntry.style.color = textColor;
+
+  logEntry.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
+  logDiv.appendChild(logEntry);
+  logDiv.scrollTop = logDiv.scrollHeight;
+}
+
 let isRegistered = false;
 
 registerBtn.onclick = () => {
@@ -99,6 +141,7 @@ socket.on('call:hangup', () => {
 socket.on('translation:text', ({ original, translated }) => {
   if (translated) {
     updateTranslationStatus(`Remote said: "${original}" → "${translated}"`);
+    logToTranscriptionLogs(`🗣️ REMOTE: "${original}" → "${translated}"`, 'translation');
   }
 });
 
@@ -255,6 +298,9 @@ function resetCallState() {
 
   translationEngine = null;
   updateTranslationStatus('');
+
+  const logDiv = document.getElementById('transcriptionLogs');
+  if (logDiv) logDiv.innerHTML = '';
 
   try { pc?.getSenders().forEach(s => s.track?.stop()); } catch {}
   try { pc?.close(); } catch {}
