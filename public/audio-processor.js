@@ -3,18 +3,18 @@ class AudioProcessor {
     this.mediaRecorder = null;
     this.audioChunks = [];
     this.isRecording = false;
-    this.recordingInterval = 3000;
+    this.recordingInterval = 5000;
     this.silenceThreshold = -55;
     this.audioContext = null;
     this.analyser = null;
     this.source = null;
     this.silenceDetectionInterval = null;
     this.consecutiveSilenceCount = 0;
-    this.requiredSilenceCount = 8;
+    this.requiredSilenceCount = 15;
     this.isSpeaking = false;
     this.lastSpeechTime = 0;
-    this.debounceDelay = 700;
-    this.minAudioSize = 5000;
+    this.debounceDelay = 1200;
+    this.minAudioSize = 10000;
     this.speechStartThreshold = -48;
     this.hasDetectedSpeech = false;
   }
@@ -173,10 +173,21 @@ class TranslationEngine {
     this.lastProcessTime = 0;
     this.minProcessInterval = 1000;
     this.mediaBlacklist = [
+      'otter.ai', 'otter ai', 'transcribed by', 'https://', 'http://',
       'mbc news', 'cnn', 'bbc', 'fox news', 'breaking news', 'live report',
       'reporter', 'correspondent', 'broadcasting', 'anchor', 'newsroom',
       'weather report', 'traffic update', 'sports update', 'commercial break',
-      'stay tuned', 'coming up next', 'brought to you by'
+      'stay tuned', 'coming up next', 'brought to you by', 'www.'
+    ];
+    this.transcriptionArtifacts = [
+      'transcribed by https://otter.ai',
+      'otter.ai',
+      '. .',
+      '...',
+      '[music]',
+      '[inaudible]',
+      '[silence]',
+      'you'
     ];
   }
 
@@ -303,6 +314,14 @@ class TranslationEngine {
 
       const normalizedText = transcribed.toLowerCase().trim();
 
+      if (this.isTranscriptionArtifact(normalizedText)) {
+        console.log('[TranslationEngine] Transcription artifact detected, skipping:', transcribed);
+        this.logToScreen('⚠️ FILTERED (Artifact): ' + transcribed, 'warning');
+        this.isProcessing = false;
+        this.processNextInQueue();
+        return { original: '', translated: '', audioBlob: null };
+      }
+
       if (this.containsMediaContent(normalizedText)) {
         console.log('[TranslationEngine] Media/broadcast content detected, skipping:', transcribed);
         this.logToScreen('⚠️ FILTERED (Media Content): ' + transcribed, 'warning');
@@ -385,6 +404,13 @@ class TranslationEngine {
 
   containsMediaContent(text) {
     return this.mediaBlacklist.some(phrase => text.includes(phrase.toLowerCase()));
+  }
+
+  isTranscriptionArtifact(text) {
+    return this.transcriptionArtifacts.some(artifact => {
+      const normalizedArtifact = artifact.toLowerCase();
+      return text === normalizedArtifact || text.includes(normalizedArtifact);
+    });
   }
 
   isDuplicateOrRecent(normalizedText) {
