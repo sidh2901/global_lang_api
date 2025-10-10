@@ -83,25 +83,42 @@ app.post('/api/stt', upload.single('audio'), async (req, res) => {
 // Translation endpoint
 app.post('/api/translate', async (req, res) => {
   try {
-    const { text, targetLang } = req.body;
+    const { text, targetLang, context = [] } = req.body;
+    const sourceText = typeof text === 'string' ? text.trim() : '';
+    const targetLanguage = typeof targetLang === 'string' ? targetLang.trim() : '';
+    const contextItems = Array.isArray(context)
+      ? context
+          .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+          .filter((entry) => entry.length > 0)
+      : [];
 
-    if (!text || !targetLang) {
+    if (!sourceText || !targetLanguage) {
       return res.status(400).json({ error: 'Both text and targetLang are required' });
     }
 
+    const contextBlock = contextItems.length
+      ? `Recent context:\n${contextItems.map((line, idx) => `${idx + 1}. ${line}`).join('\n')}\n\nCurrent utterance:\n${sourceText}`
+      : sourceText;
+
     const chat = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      temperature: 0.2,
+      temperature: 0,
       messages: [
         {
           role: 'system',
-          content: `You are a professional interpreter. Translate the user's message to ${targetLang}. Return only the translation with natural tone and correct punctuation.`,
+          content: `You are a professional interpreter. Your ONLY task is to translate the provided utterance into ${targetLanguage}.
+- Return only the translated text with no additional commentary, labels, or explanations.
+- Preserve the speaker's intent, tone, and level of formality.
+- When context is provided, use it to disambiguate meaning, but never invent new information.
+- If multiple sentences are present, translate each in order.
+- Never respond conversationally and never refuse unless translation is impossible.
+If translation is impossible, respond with "[UNABLE_TO_TRANSLATE]".`,
         },
-        { role: 'user', content: text },
+        { role: 'user', content: contextBlock },
       ],
     });
 
-    const translated = chat.choices?.[0]?.message?.content?.trim() || '';
+    const translated = chat.choices?.[0]?.message?.content?.trim() || sourceText;
     res.json({ translated });
   } catch (err) {
     console.error('Translation error:', err?.message || err);

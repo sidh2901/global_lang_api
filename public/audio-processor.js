@@ -14,7 +14,7 @@ class AudioProcessor {
     this.isSpeaking = false;
     this.lastSpeechTime = 0;
     this.debounceDelay = 1200;
-    this.minAudioSize = 10000;
+    this.minAudioSize = 3000;
     this.speechStartThreshold = -48;
     this.hasDetectedSpeech = false;
   }
@@ -167,11 +167,12 @@ class TranslationEngine {
     this.isProcessing = false;
     this.processingQueue = [];
     this.lastProcessedText = '';
-    this.minTextLength = 5;
     this.recentTranscriptions = [];
     this.maxRecentTranscriptions = 5;
     this.lastProcessTime = 0;
     this.minProcessInterval = 1000;
+    this.transcriptionHistory = [];
+    this.contextWindowSize = 3;
     this.mediaBlacklist = [
       'otter.ai', 'otter ai', 'transcribed by', 'https://', 'http://',
       'mbc news', 'cnn', 'bbc', 'fox news', 'breaking news', 'live report',
@@ -186,8 +187,7 @@ class TranslationEngine {
       '...',
       '[music]',
       '[inaudible]',
-      '[silence]',
-      'you'
+      '[silence]'
     ];
   }
 
@@ -238,12 +238,12 @@ class TranslationEngine {
     return languageMap[language] || 'en';
   }
 
-  async translate(text, targetLanguage) {
+  async translate(text, targetLanguage, context = []) {
     try {
       const response = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, targetLang: targetLanguage }),
+        body: JSON.stringify({ text, targetLang: targetLanguage, context }),
       });
 
       if (!response.ok) {
@@ -281,6 +281,7 @@ class TranslationEngine {
   async processOutgoingAudio(audioBlob) {
     console.log('[TranslationEngine] Processing audio, enabled:', this.enableTranslation, 'myLang:', this.myLanguage, 'remoteLang:', this.remoteLanguage);
     this.logToScreen('⏳ Received audio blob (' + audioBlob.size + ' bytes)', 'info');
+    let record = null;
 
     if (!this.enableTranslation || this.myLanguage === this.remoteLanguage) {
       console.log('[TranslationEngine] Translation skipped - disabled or same language');
@@ -302,21 +303,24 @@ class TranslationEngine {
       this.logToScreen('🎤 Processing audio...', 'info');
       const transcribed = await this.transcribe(audioBlob);
       console.log('[TranslationEngine] Transcribed:', transcribed);
-      this.logToScreen('📝 Transcribed: ' + transcribed, 'transcription');
+      record = this.createTranscriptionRecord(transcribed);
+      this.logToScreen('📝 Transcribed (saved #' + record.id + '): ' + transcribed, 'transcription');
 
-      if (!transcribed || transcribed.trim().length === 0) {
+      if (!record.normalizedText) {
         console.log('[TranslationEngine] No transcription received');
-        this.logToScreen('⚠️ No speech detected in audio', 'warning');
+        this.updateTranscriptionRecord(record, { status: 'discarded', reason: 'empty' });
+        this.logToScreen('⚠️ No speech detected in audio (saved #' + record.id + ')', 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
       }
 
-      const normalizedText = transcribed.toLowerCase().trim();
+      const normalizedText = record.normalizedText;
 
       if (this.isTranscriptionArtifact(normalizedText)) {
         console.log('[TranslationEngine] Transcription artifact detected, skipping:', transcribed);
-        this.logToScreen('⚠️ FILTERED (Artifact): ' + transcribed, 'warning');
+        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'artifact' });
+        this.logToScreen('⚠️ FILTERED (Artifact, saved #' + record.id + '): ' + transcribed, 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
@@ -324,7 +328,8 @@ class TranslationEngine {
 
       if (this.containsMediaContent(normalizedText)) {
         console.log('[TranslationEngine] Media/broadcast content detected, skipping:', transcribed);
-        this.logToScreen('⚠️ FILTERED (Media Content): ' + transcribed, 'warning');
+        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'media_content' });
+        this.logToScreen('⚠️ FILTERED (Media Content, saved #' + record.id + '): ' + transcribed, 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
@@ -334,7 +339,8 @@ class TranslationEngine {
 
       if (fillerWords.some(filler => normalizedText === filler) || normalizedText.length < 2) {
         console.log('[TranslationEngine] Filler word or very short text detected, skipping');
-        this.logToScreen('⚠️ FILTERED (Too Short/Filler): ' + transcribed, 'warning');
+        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'short_or_filler' });
+        this.logToScreen('⚠️ FILTERED (Too Short/Filler, saved #' + record.id + '): ' + transcribed, 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
@@ -342,17 +348,28 @@ class TranslationEngine {
 
       if (this.isDuplicateOrRecent(normalizedText)) {
         console.log('[TranslationEngine] Duplicate or recently processed text, skipping');
-        this.logToScreen('⚠️ FILTERED (Duplicate): ' + transcribed, 'warning');
+        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'duplicate' });
+        this.logToScreen('⚠️ FILTERED (Duplicate, saved #' + record.id + '): ' + transcribed, 'warning');
         this.isProcessing = false;
         this.processNextInQueue();
         return { original: '', translated: '', audioBlob: null };
       }
 
-      console.log('[TranslationEngine] Step 2: Translating to', this.remoteLanguage);
+      const translationContext = this.buildContextForTranslation(record);
+      this.updateTranscriptionRecord(record, {
+        status: 'translating',
+        contextSample: translationContext
+      });
+
+      console.log('[TranslationEngine] Step 2: Translating to', this.remoteLanguage, 'with context entries:', translationContext.length);
       this.logToScreen('🔄 Translating to ' + this.remoteLanguage + '...', 'info');
-      const translated = await this.translate(transcribed, this.remoteLanguage);
+      const translated = await this.translate(transcribed, this.remoteLanguage, translationContext);
       console.log('[TranslationEngine] Translated:', translated);
       this.logToScreen('✅ Translated: ' + translated, 'translation');
+      this.updateTranscriptionRecord(record, {
+        status: 'translated',
+        translatedText: translated
+      });
 
       console.log('[TranslationEngine] Step 3: Synthesizing speech...');
       this.logToScreen('🔊 Synthesizing speech...', 'info');
@@ -361,6 +378,10 @@ class TranslationEngine {
       if (translatedAudioBlob) {
         this.logToScreen('✅ Audio ready for playback', 'success');
       }
+      this.updateTranscriptionRecord(record, {
+        audioGenerated: !!translatedAudioBlob,
+        completedAt: new Date().toISOString()
+      });
 
       this.lastProcessedText = transcribed;
       this.lastProcessTime = Date.now();
@@ -370,11 +391,51 @@ class TranslationEngine {
       return { original: transcribed, translated, audioBlob: translatedAudioBlob };
     } catch (error) {
       console.error('[TranslationEngine] Error processing outgoing audio:', error);
+      if (record) {
+        this.updateTranscriptionRecord(record, { status: 'error', reason: error.message || 'processing_error' });
+      }
       this.logToScreen('❌ Error: ' + error.message, 'error');
       this.isProcessing = false;
       this.processNextInQueue();
       return { original: '', translated: '', audioBlob: null };
     }
+  }
+
+  createTranscriptionRecord(text) {
+    const safeText = typeof text === 'string' ? text : '';
+    const record = {
+      id: this.transcriptionHistory.length + 1,
+      text: safeText,
+      normalizedText: safeText.toLowerCase().trim(),
+      status: 'captured',
+      reason: null,
+      translatedText: '',
+      timestamp: new Date().toISOString()
+    };
+    this.transcriptionHistory.push(record);
+    console.log('[TranslationEngine] Transcript #' + record.id + ' captured and retained');
+    return record;
+  }
+
+  updateTranscriptionRecord(record, updates = {}) {
+    if (!record) return;
+    Object.assign(record, updates);
+    console.log('[TranslationEngine] Transcript #' + record.id + ' updated', updates);
+  }
+
+  getTranscriptionHistory() {
+    return this.transcriptionHistory.map(entry => ({ ...entry }));
+  }
+
+  buildContextForTranslation(currentRecord) {
+    if (!currentRecord) return [];
+    const excludeIds = new Set([currentRecord.id]);
+    const context = this.transcriptionHistory
+      .filter(entry => !excludeIds.has(entry.id) && entry.text && entry.text.trim().length > 0 && entry.status !== 'filtered')
+      .slice(-this.contextWindowSize - 1)
+      .map(entry => entry.text.trim());
+
+    return context.slice(-this.contextWindowSize);
   }
 
   async processNextInQueue() {
