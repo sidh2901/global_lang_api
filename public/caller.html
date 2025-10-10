@@ -5,57 +5,125 @@
 <title>Caller</title>
 <link rel="stylesheet" href="/style.css" />
 </head>
-<body>
-<div class="card">
-<h2>📞 Caller Console</h2>
-<div class="row">
-<input id="callerName" placeholder="Your name" />
-<select id="callerLanguage">
-  <option value="English">English</option>
-  <option value="Hindi">Hindi</option>
-  <option value="Tamil">Tamil</option>
-  <option value="Telugu">Telugu</option>
-  <option value="Kannada">Kannada</option>
-  <option value="Malayalam">Malayalam</option>
-  <option value="Marathi">Marathi</option>
-  <option value="Gujarati">Gujarati</option>
-  <option value="Bengali">Bengali</option>
-  <option value="Punjabi">Punjabi</option>
-  <option value="Urdu">Urdu</option>
-  <option value="Spanish">Spanish</option>
-  <option value="French">French</option>
-  <option value="German">German</option>
-  <option value="Italian">Italian</option>
-  <option value="Portuguese">Portuguese</option>
-  <option value="Chinese">Chinese</option>
-  <option value="Japanese">Japanese</option>
-  <option value="Korean">Korean</option>
-  <option value="Arabic">Arabic</option>
-  <option value="Russian">Russian</option>
-</select>
-<select id="agentSelect"></select>
-<button id="callBtn" class="btn">Call</button>
-<button id="hangupBtn" class="btn secondary" disabled>Hang Up</button>
-</div>
-<div class="row" style="margin-top: 10px;">
-<label>
-  <input type="checkbox" id="enableTranslation" checked />
-  Enable Real-time Translation
-</label>
-</div>
-<div class="hint">Agents shown are currently online and available.</div>
-<hr />
-<div id="status">Idle.</div>
-<div id="translationStatus"></div>
-<div class="logs-container">
-<h3>Live Transcription Logs</h3>
-<div id="transcriptionLogs"></div>
-</div>
-<div class="audio">
-<div class="hint">Remote audio will play here when connected</div>
-<audio id="remoteAudio" autoplay playsinline></audio>
-<audio id="callerRingtone" src="/sounds/ringtone.mp3" loop></audio>
-</div>
+<body class="console">
+<div class="console-shell">
+  <header class="console-header">
+    <div>
+      <p class="console-kicker">Global Lang Ops</p>
+      <h1 class="console-title">Caller Experience Desk</h1>
+      <p class="console-subtitle">Launch live conversations with AI-powered interpretation in your preferred language.</p>
+    </div>
+    <div class="console-status">
+      <span class="status-indicator online"></span>
+      <span>Ready for Service</span>
+    </div>
+  </header>
+
+  <main class="console-grid">
+    <section class="panel panel-primary">
+      <header class="panel-header">
+        <div>
+          <h2>Session Setup</h2>
+          <p>Identify yourself, select your language, then summon an available service specialist.</p>
+        </div>
+        <div class="micro-tag">Caller Ops</div>
+      </header>
+
+      <div class="row">
+        <input id="callerName" placeholder="Your display name" />
+        <select id="callerLanguage">
+          <option value="English">English</option>
+          <option value="Hindi">Hindi</option>
+          <option value="Tamil">Tamil</option>
+          <option value="Telugu">Telugu</option>
+          <option value="Kannada">Kannada</option>
+          <option value="Malayalam">Malayalam</option>
+          <option value="Marathi">Marathi</option>
+          <option value="Gujarati">Gujarati</option>
+          <option value="Bengali">Bengali</option>
+          <option value="Punjabi">Punjabi</option>
+          <option value="Urdu">Urdu</option>
+          <option value="Spanish">Spanish</option>
+          <option value="French">French</option>
+          <option value="German">German</option>
+          <option value="Italian">Italian</option>
+          <option value="Portuguese">Portuguese</option>
+          <option value="Chinese">Chinese</option>
+          <option value="Japanese">Japanese</option>
+          <option value="Korean">Korean</option>
+          <option value="Arabic">Arabic</option>
+          <option value="Russian">Russian</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <select id="agentSelect" class="wide"></select>
+        <button id="callBtn" class="btn">Initiate Call</button>
+        <button id="hangupBtn" class="btn secondary" disabled>End Session</button>
+      </div>
+
+      <div class="panel-inline-options">
+        <label class="toggle">
+          <input type="checkbox" id="enableTranslation" checked />
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span class="toggle-label">
+            <strong>Real-time Translation</strong>
+            <small>Automatically transcribe and translate your speech for the agent.</small>
+          </span>
+        </label>
+        <p class="hint">Agents listed are live and available for connection.</p>
+      </div>
+    </section>
+
+    <section class="panel panel-status">
+      <header class="panel-header">
+        <div>
+          <h2>Live Call Status</h2>
+          <p>Keep track of call progress and channel activity in real time.</p>
+        </div>
+      </header>
+      <div id="status" class="status-card">Idle.</div>
+      <div id="translationStatus" class="translation-banner"></div>
+
+      <div class="audio-hub">
+        <div class="audio-header">
+          <div>
+            <h3>Voice Channels</h3>
+            <p class="hint">Adjust live audio to focus on interpreted playback when needed.</p>
+          </div>
+          <label class="toggle audio-toggle">
+            <input type="checkbox" id="translatedOnlyToggle" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">
+              <strong>Translated Voice Priority</strong>
+              <small>Mute original remote audio feed</small>
+            </span>
+          </label>
+        </div>
+        <div class="audio-stream">
+          <audio id="remoteAudio" autoplay playsinline></audio>
+          <p class="hint">Remote audio feed will appear once a call is connected.</p>
+        </div>
+        <audio id="callerRingtone" src="/sounds/ringtone.mp3" loop></audio>
+      </div>
+    </section>
+
+    <section class="panel panel-logs">
+      <header class="panel-header">
+        <div>
+          <h2>Conversation Timeline</h2>
+          <p>A running log of transcriptions, translations, and system events.</p>
+        </div>
+      </header>
+      <div class="logs-container">
+        <div class="logs-header">
+          <h3>Live Transcription Feed</h3>
+          <span class="log-pill">Synced</span>
+        </div>
+        <div id="transcriptionLogs"></div>
+      </div>
+    </section>
+  </main>
 </div>
 <script src="/socket.io/socket.io.js"></script>
 <script src="/caller.js" type="module"></script>

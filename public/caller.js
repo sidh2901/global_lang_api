@@ -14,6 +14,7 @@ let translationEngine = null;
 let remoteLanguage = 'English';
 let translatedAudioQueue = [];
 let isPlayingTranslatedAudio = false;
+let preferTranslatedAudioOnly = false;
 
 const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
@@ -27,6 +28,7 @@ const hangupBtn = $('#hangupBtn');
 const status = $('#status');
 const translationStatusDiv = $('#translationStatus');
 const remoteAudio = $('#remoteAudio');
+const translatedOnlyToggle = $('#translatedOnlyToggle');
 
 const callerRingtone = document.getElementById('callerRingtone');
 
@@ -83,6 +85,25 @@ function logToTranscriptionLogs(message, type = 'info') {
   logDiv.scrollTop = logDiv.scrollHeight;
 }
 
+function applyOriginalAudioPreference() {
+  if (!remoteAudio) return;
+  const disableRemote = preferTranslatedAudioOnly;
+  remoteAudio.muted = disableRemote;
+  remoteAudio.volume = disableRemote ? 0 : 1;
+  if (remoteAudio?.srcObject) {
+    remoteAudio.srcObject.getAudioTracks().forEach(track => {
+      track.enabled = !disableRemote;
+    });
+  }
+}
+
+if (translatedOnlyToggle) {
+  translatedOnlyToggle.addEventListener('change', (event) => {
+    preferTranslatedAudioOnly = event.target.checked;
+    applyOriginalAudioPreference();
+  });
+}
+
 socket.on('agents:list', (list) => {
   console.log(list);
   agentSelect.innerHTML = '';
@@ -122,6 +143,7 @@ callBtn.onclick = async () => {
   };
   pc.ontrack = (e) => {
     remoteAudio.srcObject = e.streams[0];
+    applyOriginalAudioPreference();
   };
 
   const offer = await pc.createOffer();
@@ -256,7 +278,7 @@ function playNextTranslatedAudio() {
 
     if (remoteAudio.srcObject) {
       const remoteTrack = remoteAudio.srcObject.getAudioTracks()[0];
-      if (remoteTrack) remoteTrack.enabled = true;
+      if (remoteTrack) remoteTrack.enabled = !preferTranslatedAudioOnly;
     }
 
     playNextTranslatedAudio();
@@ -286,4 +308,10 @@ function cleanup() {
   try { pc?.close(); } catch {}
   pc = null;
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+
+  preferTranslatedAudioOnly = false;
+  if (translatedOnlyToggle) {
+    translatedOnlyToggle.checked = false;
+  }
+  applyOriginalAudioPreference();
 }

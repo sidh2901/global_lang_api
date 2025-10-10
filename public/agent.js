@@ -10,6 +10,7 @@ let translationEngine = null;
 let remoteLanguage = 'English';
 let translatedAudioQueue = [];
 let isPlayingTranslatedAudio = false;
+let preferTranslatedAudioOnly = false;
 
 const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
@@ -26,6 +27,9 @@ const acceptBtn = $('#acceptBtn');
 const declineBtn = $('#declineBtn');
 const hangupBtn = $('#hangupBtn');
 const remoteAudio = $('#remoteAudio');
+const translatedOnlyToggle = $('#translatedOnlyToggle');
+const headerStatusText = document.getElementById('statusLabelText');
+const headerStatusIndicator = document.querySelector('.console-status .status-indicator');
 
 const agentRingtone = document.getElementById('agentRingtone');
 const inCallControls = document.getElementById('inCallControls');
@@ -91,6 +95,44 @@ function logToTranscriptionLogs(message, type = 'info') {
   logDiv.scrollTop = logDiv.scrollHeight;
 }
 
+function applyOriginalAudioPreference() {
+  if (!remoteAudio) return;
+  const disableRemote = preferTranslatedAudioOnly;
+  remoteAudio.muted = disableRemote;
+  remoteAudio.volume = disableRemote ? 0 : 1;
+  if (remoteAudio?.srcObject) {
+    remoteAudio.srcObject.getAudioTracks().forEach(track => {
+      track.enabled = !disableRemote;
+    });
+  }
+}
+
+if (translatedOnlyToggle) {
+  translatedOnlyToggle.addEventListener('change', (event) => {
+    preferTranslatedAudioOnly = event.target.checked;
+    applyOriginalAudioPreference();
+  });
+}
+
+function setHeaderStatus(state, text) {
+  if (headerStatusText) {
+    headerStatusText.textContent = text;
+  }
+  if (headerStatusIndicator) {
+    headerStatusIndicator.classList.remove('online', 'standby', 'busy');
+    headerStatusIndicator.classList.add(state);
+  }
+}
+
+function setBadgeState(state) {
+  if (statusBadge) {
+    statusBadge.dataset.state = state;
+  }
+}
+
+setHeaderStatus('standby', 'Offline');
+setBadgeState('offline');
+
 let isRegistered = false;
 
 registerBtn.onclick = () => {
@@ -105,6 +147,8 @@ registerBtn.onclick = () => {
   statusBadge.textContent = 'online (available)';
   toggleAvailBtn.disabled = false;
   registerBtn.disabled = true;
+  setHeaderStatus('online', 'Available');
+  setBadgeState('available');
 };
 
 toggleAvailBtn.onclick = () => {
@@ -112,6 +156,8 @@ toggleAvailBtn.onclick = () => {
   const next = !currentlyAvailable;
   socket.emit('agent:setAvailable', next);
   statusBadge.textContent = next ? 'online (available)' : 'online (unavailable)';
+  setHeaderStatus(next ? 'online' : 'standby', next ? 'Available' : 'Unavailable');
+  setBadgeState(next ? 'available' : 'unavailable');
 };
 
 socket.on('call:incoming', ({ callId, callerName, offer, callerLanguage }) => {
@@ -126,6 +172,8 @@ socket.on('call:incoming', ({ callId, callerName, offer, callerLanguage }) => {
   startAgentRingtone();
 
   updateTranslationStatus(`Caller speaks ${remoteLanguage}`);
+  setHeaderStatus('busy', 'Incoming Call');
+  setBadgeState('busy');
 });
 
 socket.on('webrtc:ice', async ({ candidate }) => {
@@ -169,6 +217,7 @@ acceptBtn.onclick = async () => {
   };
   pc.ontrack = (e) => {
     remoteAudio.srcObject = e.streams[0];
+    applyOriginalAudioPreference();
   };
 
   await pc.setRemoteDescription(new RTCSessionDescription(lastIncomingOffer));
@@ -181,6 +230,8 @@ acceptBtn.onclick = async () => {
   });
 
   showInCallControls(true);
+  setHeaderStatus('busy', 'In Session');
+  setBadgeState('busy');
 
   const myLanguage = agentLanguageSelect.value;
   const enableTranslation = enableTranslationCheckbox.checked;
@@ -244,7 +295,7 @@ function playNextTranslatedAudio() {
 
     if (remoteAudio.srcObject) {
       const remoteTrack = remoteAudio.srcObject.getAudioTracks()[0];
-      if (remoteTrack) remoteTrack.enabled = true;
+      if (remoteTrack) remoteTrack.enabled = !preferTranslatedAudioOnly;
     }
 
     playNextTranslatedAudio();
@@ -307,4 +358,19 @@ function resetCallState() {
   pc = null;
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   stopAgentRingtone();
+
+  preferTranslatedAudioOnly = false;
+  if (translatedOnlyToggle) {
+    translatedOnlyToggle.checked = false;
+  }
+  applyOriginalAudioPreference();
+
+  const currentlyAvailable = statusBadge.textContent.includes('available');
+  if (isRegistered) {
+    setHeaderStatus(currentlyAvailable ? 'online' : 'standby', currentlyAvailable ? 'Available' : 'Unavailable');
+    setBadgeState(currentlyAvailable ? 'available' : 'unavailable');
+  } else {
+    setHeaderStatus('standby', 'Offline');
+    setBadgeState('offline');
+  }
 }

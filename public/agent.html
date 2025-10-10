@@ -5,69 +5,139 @@
 <title>Agent</title>
 <link rel="stylesheet" href="/style.css" />
 </head>
-<body>
-<div class="card">
-<h2>🎧 Agent Console</h2>
-<div class="row">
-<input id="agentName" placeholder="Your display name" />
-<select id="agentLanguage">
-  <option value="English">English</option>
-  <option value="Hindi">Hindi</option>
-  <option value="Tamil">Tamil</option>
-  <option value="Telugu">Telugu</option>
-  <option value="Kannada">Kannada</option>
-  <option value="Malayalam">Malayalam</option>
-  <option value="Marathi">Marathi</option>
-  <option value="Gujarati">Gujarati</option>
-  <option value="Bengali">Bengali</option>
-  <option value="Punjabi">Punjabi</option>
-  <option value="Urdu">Urdu</option>
-  <option value="Spanish">Spanish</option>
-  <option value="French">French</option>
-  <option value="German">German</option>
-  <option value="Italian">Italian</option>
-  <option value="Portuguese">Portuguese</option>
-  <option value="Chinese">Chinese</option>
-  <option value="Japanese">Japanese</option>
-  <option value="Korean">Korean</option>
-  <option value="Arabic">Arabic</option>
-  <option value="Russian">Russian</option>
-</select>
-<button id="registerBtn" class="btn">Go Online</button>
-<button id="toggleAvailBtn" class="btn secondary" disabled>Toggle Available</button>
-<span id="status" class="badge">offline</span>
-</div>
-<div class="row" style="margin-top: 10px;">
-<label>
-  <input type="checkbox" id="enableTranslation" checked />
-  Enable Real-time Translation
-</label>
-</div>
-<hr />
-<div>
-<h3>Incoming Call</h3>
-<div id="incoming">No calls yet.</div>
-<div id="translationStatus"></div>
-<div class="logs-container">
-<h4>Live Transcription Logs</h4>
-<div id="transcriptionLogs"></div>
-</div>
-<div class="row">
-<button id="acceptBtn" class="btn" disabled>Accept</button>
-<button id="declineBtn" class="btn secondary" disabled>Decline</button>
-<button id="hangupBtn" class="btn secondary" disabled>Hang Up</button>
-</div>
-<div class="row" id="inCallControls" style="margin-top:10px; display:none;">
-  <button id="muteBtn" class="btn secondary" disabled>Mute</button>
-  <button id="unmuteBtn" class="btn secondary" disabled>Unmute</button>
-  <button id="hangupBtn" class="btn secondary" disabled>Hang Up</button>
-</div>
-<div class="audio">
-<div class="hint">Remote audio will play here when connected</div>
-<audio id="remoteAudio" autoplay playsinline></audio>
-<audio id="agentRingtone" src="/sounds/ringtone.mp3" loop></audio>
-</div>
-</div>
+<body class="console">
+<div class="console-shell">
+  <header class="console-header">
+    <div>
+      <p class="console-kicker">Global Lang Ops</p>
+      <h1 class="console-title">Agent Response Desk</h1>
+      <p class="console-subtitle">Handle inbound requests with live translation, transcription, and audio intelligence.</p>
+    </div>
+    <div class="console-status">
+      <span class="status-indicator standby"></span>
+      <span id="statusLabelText">Offline</span>
+    </div>
+  </header>
+
+  <main class="console-grid">
+    <section class="panel panel-primary">
+      <header class="panel-header">
+        <div>
+          <h2>Agent Profile & Availability</h2>
+          <p>Configure how the network sees you before going live on the service desk.</p>
+        </div>
+        <div class="micro-tag">Agent Ops</div>
+      </header>
+
+      <div class="row">
+        <input id="agentName" placeholder="Display name" />
+        <select id="agentLanguage">
+          <option value="English">English</option>
+          <option value="Hindi">Hindi</option>
+          <option value="Tamil">Tamil</option>
+          <option value="Telugu">Telugu</option>
+          <option value="Kannada">Kannada</option>
+          <option value="Malayalam">Malayalam</option>
+          <option value="Marathi">Marathi</option>
+          <option value="Gujarati">Gujarati</option>
+          <option value="Bengali">Bengali</option>
+          <option value="Punjabi">Punjabi</option>
+          <option value="Urdu">Urdu</option>
+          <option value="Spanish">Spanish</option>
+          <option value="French">French</option>
+          <option value="German">German</option>
+          <option value="Italian">Italian</option>
+          <option value="Portuguese">Portuguese</option>
+          <option value="Chinese">Chinese</option>
+          <option value="Japanese">Japanese</option>
+          <option value="Korean">Korean</option>
+          <option value="Arabic">Arabic</option>
+          <option value="Russian">Russian</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <button id="registerBtn" class="btn">Go Online</button>
+        <button id="toggleAvailBtn" class="btn secondary" disabled>Toggle Availability</button>
+        <span id="status" class="badge">offline</span>
+      </div>
+
+      <div class="panel-inline-options">
+        <label class="toggle">
+          <input type="checkbox" id="enableTranslation" checked />
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span class="toggle-label">
+            <strong>Real-time Translation</strong>
+            <small>Keep translation pipeline active for every accepted call.</small>
+          </span>
+        </label>
+      </div>
+    </section>
+
+    <section class="panel panel-status">
+      <header class="panel-header">
+        <div>
+          <h2>Engagement Console</h2>
+          <p>Review inbound call information and respond with confidence.</p>
+        </div>
+      </header>
+
+      <div class="incoming capsule">
+        <h3>Incoming Session</h3>
+        <p id="incoming">No calls yet.</p>
+      </div>
+      <div id="translationStatus" class="translation-banner"></div>
+
+      <div class="call-actions">
+        <button id="acceptBtn" class="btn" disabled>Accept Call</button>
+        <button id="declineBtn" class="btn secondary" disabled>Decline</button>
+        <button id="hangupBtn" class="btn secondary" disabled>End Session</button>
+      </div>
+
+      <div class="in-call-grid" id="inCallControls" style="display:none;">
+        <button id="muteBtn" class="btn secondary" disabled>Mute Mic</button>
+        <button id="unmuteBtn" class="btn secondary" disabled>Unmute Mic</button>
+      </div>
+
+      <div class="audio-hub">
+        <div class="audio-header">
+          <div>
+            <h3>Voice Channels</h3>
+            <p class="hint">Select how much of the caller’s original voice you want to monitor.</p>
+          </div>
+          <label class="toggle audio-toggle">
+            <input type="checkbox" id="translatedOnlyToggle" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">
+              <strong>Translated Voice Priority</strong>
+              <small>Mute original caller audio feed</small>
+            </span>
+          </label>
+        </div>
+        <div class="audio-stream">
+          <audio id="remoteAudio" autoplay playsinline></audio>
+          <p class="hint">Live caller audio appears here once a session is active.</p>
+        </div>
+        <audio id="agentRingtone" src="/sounds/ringtone.mp3" loop></audio>
+      </div>
+    </section>
+
+    <section class="panel panel-logs">
+      <header class="panel-header">
+        <div>
+          <h2>Conversation Timeline</h2>
+          <p>Monitor transcriptions and translation outcomes as they happen.</p>
+        </div>
+      </header>
+      <div class="logs-container">
+        <div class="logs-header">
+          <h3>Live Transcription Feed</h3>
+          <span class="log-pill">Synced</span>
+        </div>
+        <div id="transcriptionLogs"></div>
+      </div>
+    </section>
+  </main>
 </div>
 <script src="/socket.io/socket.io.js"></script>
 <script src="/agent.js" type="module"></script>

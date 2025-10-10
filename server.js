@@ -18,15 +18,9 @@ app.use(express.static(path.resolve(__dirname, 'public'), { extensions: ['html']
 
 app.use(express.json());
 
-// Optional: a simple index so GET / works on Render health checks
+// Landing screen to choose console role
 app.get('/', (_req, res) => {
-  res.type('html').send(`
-    <h2>WebRTC Demo</h2>
-    <ul>
-      <li><a href="/agent.html">Agent</a></li>
-      <li><a href="/caller.html">Caller</a></li>
-    </ul>
-  `);
+  res.sendFile(path.resolve(__dirname, 'public', 'index.html'));
 });
 
 // In-memory agent registry: { socketId: { name, available, busy } }
