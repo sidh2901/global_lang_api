@@ -4,7 +4,7 @@ uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 ctranslate2>=3.12.0
 faster-whisper>=0.10.0
-transformers>=4.41.0,<4.57
+transformers==4.44.2
 huggingface-hub>=0.22.0
 numpy>=1.24.0,<2.0
 soundfile>=0.12.1
