@@ -30,6 +30,7 @@ const remoteAudio = $('#remoteAudio');
 const translatedOnlyToggle = $('#translatedOnlyToggle');
 const headerStatusText = document.getElementById('statusLabelText');
 const headerStatusIndicator = document.querySelector('.console-status .status-indicator');
+const voiceSelect = $('#voiceSelect');
 
 const agentRingtone = document.getElementById('agentRingtone');
 const inCallControls = document.getElementById('inCallControls');
@@ -111,6 +112,18 @@ if (translatedOnlyToggle) {
   translatedOnlyToggle.addEventListener('change', (event) => {
     preferTranslatedAudioOnly = event.target.checked;
     applyOriginalAudioPreference();
+  });
+}
+
+function getSelectedVoice() {
+  return (voiceSelect?.value || 'alloy').trim();
+}
+
+if (voiceSelect) {
+  voiceSelect.addEventListener('change', () => {
+    if (translationEngine) {
+      translationEngine.setVoice(getSelectedVoice());
+    }
   });
 }
 
@@ -235,8 +248,9 @@ acceptBtn.onclick = async () => {
 
   const myLanguage = agentLanguageSelect.value;
   const enableTranslation = enableTranslationCheckbox.checked;
+  const voiceId = getSelectedVoice();
 
-  translationEngine = new TranslationEngine(myLanguage, remoteLanguage, enableTranslation);
+  translationEngine = new TranslationEngine(myLanguage, remoteLanguage, enableTranslation, voiceId);
 
   if (enableTranslation && myLanguage !== remoteLanguage) {
     updateTranslationStatus(`Translation enabled: ${myLanguage} ↔ ${remoteLanguage}`);

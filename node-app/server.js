@@ -10,8 +10,53 @@ const { Server } = require('socket.io');
 const io = new Server(http, { cors: { origin: '*' } });
 
 const PORT = process.env.PORT || 3000;
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const TRANSLATOR_MODE = (process.env.TRANSLATOR_MODE || 'openai').toLowerCase();
+const USE_LOCAL_TRANSLATOR = TRANSLATOR_MODE === 'local';
+const LOCAL_TRANSLATOR_URL = process.env.LOCAL_TRANSLATOR_URL || 'http://localhost:8000';
+const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+const openai = hasOpenAIKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const upload = multer({ storage: multer.memoryStorage() });
+
+class LocalServiceError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function requireOpenAI() {
+  if (!openai) {
+    throw new Error('OpenAI client not initialised. Set OPENAI_API_KEY or switch TRANSLATOR_MODE=local.');
+  }
+  return openai;
+}
+
+async function fetchLocal(pathname, init) {
+  const url = new URL(pathname, LOCAL_TRANSLATOR_URL).toString();
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    let errorDetail = `${response.status} ${response.statusText}`;
+    const clone = response.clone();
+    try {
+      const data = await clone.json();
+      errorDetail = typeof data === 'string' ? data : JSON.stringify(data);
+    } catch {
+      try {
+        errorDetail = await response.text();
+      } catch {
+        // ignore
+      }
+    }
+    throw new LocalServiceError(response.status, errorDetail);
+  }
+  return response;
+}
+
+function fileFromUpload(upload, fallbackName) {
+  const filename = upload.originalname || fallbackName || 'audio.webm';
+  const mimetype = upload.mimetype || 'application/octet-stream';
+  return new File([upload.buffer], filename, { type: mimetype });
+}
 
 // app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(path.resolve(__dirname, 'public'), { extensions: ['html'] }));
@@ -55,10 +100,33 @@ app.post('/api/stt', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
 
-    const file = new File([req.file.buffer], 'audio.webm', { type: req.file.mimetype || 'audio/webm' });
+    if (USE_LOCAL_TRANSLATOR) {
+      const form = new FormData();
+      form.append('file', fileFromUpload(req.file, 'audio.webm'));
+      const languageHint = (req.body?.language || '').trim();
+      if (languageHint) form.append('language_hint', languageHint);
+      const targetLang = (req.body?.targetLang || '').trim().toLowerCase();
+      if (targetLang) form.append('target_language', targetLang);
+
+      const response = await fetchLocal('/transcribe', {
+        method: 'POST',
+        body: form,
+      });
+      const data = await response.json();
+      res.json({
+        text: data.transcript || data.text || '',
+        translated: data.translated || '',
+        targetLanguage: data.target_language || targetLang || null,
+        mode: 'local',
+      });
+      return;
+    }
+
+    const client = requireOpenAI();
+    const file = fileFromUpload(req.file, 'audio.webm');
     const language = (req.body?.language || '').trim() || undefined; // e.g., 'hi', 'es', 'mr', etc.
 
-    const result = await openai.audio.transcriptions.create({
+    const result = await client.audio.transcriptions.create({
       model: 'whisper-1',
       file,
       language,               // <— HINT: improves accuracy/retention a lot
@@ -66,8 +134,12 @@ app.post('/api/stt', upload.single('audio'), async (req, res) => {
       prompt: 'Conversational phone call audio; transcribe clearly with punctuation.',
     });
 
-    res.json({ text: result.text || '' });
+    res.json({ text: result.text || '', mode: 'openai' });
   } catch (err) {
+    if (err instanceof LocalServiceError) {
+      console.error('STT local error:', err.message);
+      return res.status(err.status).json({ error: err.message, mode: 'local' });
+    }
     console.error('STT error:', err?.message || err);
     res.status(500).json({ error: 'STT failed' });
   }
@@ -79,7 +151,8 @@ app.post('/api/translate', async (req, res) => {
   try {
     const { text, targetLang, context = [] } = req.body;
     const sourceText = typeof text === 'string' ? text.trim() : '';
-    const targetLanguage = typeof targetLang === 'string' ? targetLang.trim() : '';
+    const targetLanguageRaw = typeof targetLang === 'string' ? targetLang.trim() : '';
+    const targetLanguage = targetLanguageRaw.toLowerCase();
     const contextItems = Array.isArray(context)
       ? context
           .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
@@ -94,13 +167,28 @@ app.post('/api/translate', async (req, res) => {
       ? `Recent context:\n${contextItems.map((line, idx) => `${idx + 1}. ${line}`).join('\n')}\n\nCurrent utterance:\n${sourceText}`
       : sourceText;
 
-    const chat = await openai.chat.completions.create({
+    if (USE_LOCAL_TRANSLATOR) {
+      const response = await fetchLocal('/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: sourceText,
+          target_language: targetLanguage,
+        }),
+      });
+      const data = await response.json();
+      res.json({ translated: data.translated || sourceText, mode: 'local' });
+      return;
+    }
+
+    const client = requireOpenAI();
+    const chat = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0,
       messages: [
         {
           role: 'system',
-          content: `You are a professional interpreter. Your ONLY task is to translate the provided utterance into ${targetLanguage}.
+          content: `You are a professional interpreter. Your ONLY task is to translate the provided utterance into ${targetLanguageRaw}.
 - Return only the translated text with no additional commentary, labels, or explanations.
 - Preserve the speaker's intent, tone, and level of formality.
 - When context is provided, use it to disambiguate meaning, but never invent new information.
@@ -113,8 +201,12 @@ If translation is impossible, respond with "[UNABLE_TO_TRANSLATE]".`,
     });
 
     const translated = chat.choices?.[0]?.message?.content?.trim() || sourceText;
-    res.json({ translated });
+    res.json({ translated, mode: 'openai' });
   } catch (err) {
+    if (err instanceof LocalServiceError) {
+      console.error('Translation local error:', err.message);
+      return res.status(err.status).json({ error: err.message, mode: 'local' });
+    }
     console.error('Translation error:', err?.message || err);
     res.status(500).json({ error: 'Translation failed' });
   }
@@ -123,13 +215,34 @@ If translation is impossible, respond with "[UNABLE_TO_TRANSLATE]".`,
 // Text-to-Speech endpoint
 app.post('/api/tts', async (req, res) => {
   try {
-    const { text, voice = 'alloy', format = 'mp3' } = req.body;
+    const { text, voice = 'alloy', format = 'mp3', targetLang } = req.body;
+    const normalizedTargetLang = typeof targetLang === 'string' ? targetLang.trim().toLowerCase() : '';
 
     if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'Field text is required' });
     }
 
-    const response = await openai.audio.speech.create({
+    if (USE_LOCAL_TRANSLATOR) {
+      const payload = { text };
+      if (normalizedTargetLang) {
+        payload.target_language = normalizedTargetLang;
+      }
+      if (voice && voice !== 'alloy') {
+        payload.voice = voice;
+      }
+      const response = await fetchLocal('/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const arrayBuffer = await response.arrayBuffer();
+      res.set('Content-Type', 'audio/wav');
+      res.send(Buffer.from(arrayBuffer));
+      return;
+    }
+
+    const client = requireOpenAI();
+    const response = await client.audio.speech.create({
       model: 'tts-1',
       voice,
       input: text,
@@ -147,6 +260,10 @@ app.post('/api/tts', async (req, res) => {
     res.set('Content-Type', contentType);
     res.send(Buffer.from(arrayBuffer));
   } catch (err) {
+    if (err instanceof LocalServiceError) {
+      console.error('TTS local error:', err.message);
+      return res.status(err.status).json({ error: err.message, mode: 'local' });
+    }
     console.error('TTS error:', err?.message || err);
     res.status(500).json({ error: 'TTS failed' });
   }

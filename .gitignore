@@ -1,2 +1,18 @@
-/node_modules
+# Node.js artifacts
+node_modules/
+npm-debug.log
+
+# Python environments
+.venv/
+python-service/.venv/
+
+# Environment files
 .env
+*.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store

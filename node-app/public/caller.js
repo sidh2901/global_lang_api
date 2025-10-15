@@ -29,6 +29,7 @@ const status = $('#status');
 const translationStatusDiv = $('#translationStatus');
 const remoteAudio = $('#remoteAudio');
 const translatedOnlyToggle = $('#translatedOnlyToggle');
+const voiceSelect = $('#voiceSelect');
 
 const callerRingtone = document.getElementById('callerRingtone');
 
@@ -104,6 +105,18 @@ if (translatedOnlyToggle) {
   });
 }
 
+function getSelectedVoice() {
+  return (voiceSelect?.value || 'alloy').trim();
+}
+
+if (voiceSelect) {
+  voiceSelect.addEventListener('change', () => {
+    if (translationEngine) {
+      translationEngine.setVoice(getSelectedVoice());
+    }
+  });
+}
+
 socket.on('agents:list', (list) => {
   console.log(list);
   agentSelect.innerHTML = '';
@@ -173,8 +186,9 @@ socket.on('call:accepted', async ({ answer, agentLanguage }) => {
 
   const myLanguage = callerLanguageSelect.value;
   const enableTranslation = enableTranslationCheckbox.checked;
+  const voiceId = getSelectedVoice();
 
-  translationEngine = new TranslationEngine(myLanguage, remoteLanguage, enableTranslation);
+  translationEngine = new TranslationEngine(myLanguage, remoteLanguage, enableTranslation, voiceId);
 
   if (enableTranslation && myLanguage !== remoteLanguage) {
     updateTranslationStatus(`Translation enabled: ${myLanguage} ↔ ${remoteLanguage}`);

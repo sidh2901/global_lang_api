@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: global-lang-python
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt && python download_models.py --quantization int8 --force
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: WHISPER_MODEL
+        value: small

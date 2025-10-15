@@ -160,7 +160,7 @@ class AudioProcessor {
 }
 
 class TranslationEngine {
-  constructor(myLanguage, remoteLanguage, enableTranslation) {
+  constructor(myLanguage, remoteLanguage, enableTranslation, voiceId = 'alloy') {
     this.myLanguage = myLanguage;
     this.remoteLanguage = remoteLanguage;
     this.enableTranslation = enableTranslation;
@@ -173,6 +173,7 @@ class TranslationEngine {
     this.minProcessInterval = 1000;
     this.transcriptionHistory = [];
     this.contextWindowSize = 3;
+    this.voiceId = voiceId || 'alloy';
     this.mediaBlacklist = [
       'otter.ai', 'otter ai', 'transcribed by', 'https://', 'http://',
       'mbc news', 'cnn', 'bbc', 'fox news', 'breaking news', 'live report',
@@ -358,7 +359,8 @@ class TranslationEngine {
       const translationContext = this.buildContextForTranslation(record);
       this.updateTranscriptionRecord(record, {
         status: 'translating',
-        contextSample: translationContext
+        contextSample: translationContext,
+        voice: this.voiceId
       });
 
       console.log('[TranslationEngine] Step 2: Translating to', this.remoteLanguage, 'with context entries:', translationContext.length);
@@ -368,19 +370,21 @@ class TranslationEngine {
       this.logToScreen('✅ Translated: ' + translated, 'translation');
       this.updateTranscriptionRecord(record, {
         status: 'translated',
-        translatedText: translated
+        translatedText: translated,
+        voice: this.voiceId
       });
 
       console.log('[TranslationEngine] Step 3: Synthesizing speech...');
       this.logToScreen('🔊 Synthesizing speech...', 'info');
-      const translatedAudioBlob = await this.synthesizeSpeech(translated);
+      const translatedAudioBlob = await this.synthesizeSpeech(translated, this.voiceId);
       console.log('[TranslationEngine] Audio blob created:', translatedAudioBlob ? 'success' : 'failed');
       if (translatedAudioBlob) {
         this.logToScreen('✅ Audio ready for playback', 'success');
       }
       this.updateTranscriptionRecord(record, {
         audioGenerated: !!translatedAudioBlob,
-        completedAt: new Date().toISOString()
+        completedAt: new Date().toISOString(),
+        voice: this.voiceId
       });
 
       this.lastProcessedText = transcribed;
@@ -410,7 +414,8 @@ class TranslationEngine {
       status: 'captured',
       reason: null,
       translatedText: '',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      voice: this.voiceId
     };
     this.transcriptionHistory.push(record);
     console.log('[TranslationEngine] Transcript #' + record.id + ' captured and retained');
@@ -449,7 +454,7 @@ class TranslationEngine {
     if (!text) return null;
 
     try {
-      const audioBlob = await this.synthesizeSpeech(text);
+      const audioBlob = await this.synthesizeSpeech(text, this.voiceId);
       return audioBlob;
     } catch (error) {
       console.error('Error playing translated audio:', error);
@@ -457,10 +462,17 @@ class TranslationEngine {
     }
   }
 
-  updateSettings(myLanguage, remoteLanguage, enableTranslation) {
+  updateSettings(myLanguage, remoteLanguage, enableTranslation, voiceId = this.voiceId) {
     this.myLanguage = myLanguage;
     this.remoteLanguage = remoteLanguage;
     this.enableTranslation = enableTranslation;
+    this.setVoice(voiceId);
+  }
+
+  setVoice(voiceId) {
+    if (!voiceId || voiceId === this.voiceId) return;
+    this.voiceId = voiceId;
+    console.log('[TranslationEngine] Voice selection updated to', voiceId);
   }
 
   containsMediaContent(text) {

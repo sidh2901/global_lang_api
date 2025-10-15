@@ -1,0 +1,26 @@
+{
+  "name": "global-lang-web",
+  "version": "1.0.0",
+  "description": "WebRTC call experience that connects callers with interpreters and proxies OpenAI APIs.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development nodemon server.js",
+    "render-build": "npm install"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^4.19.2",
+    "multer": "^2.0.2",
+    "openai": "^6.1.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": "20.19.0"
+  },
+  "author": "Jyoshna",
+  "license": "ISC"
+}
