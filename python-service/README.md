@@ -32,7 +32,8 @@ Visit `http://localhost:8000/docs` for the interactive OpenAPI explorer.
 ## Render deployment
 1. Set up a Render **Web Service** with the following:
    - **Environment**: `Python`
-   - **Build Command**: `pip install -r requirements.txt && python download_models.py --quantization int8 --force`
+   - **Python Version**: 3.11 (add `runtime.txt` with `python-3.11.9`)
+   - **Build Command**: `pip install --upgrade pip && pip install -r requirements.txt && python download_models.py --quantization int8 --force`
    - **Start Command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
 2. (Optional) Add environment variables if you customise the defaults:
    - `WHISPER_MODEL` – Whisper checkpoint (default `small`)
