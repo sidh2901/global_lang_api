@@ -1,16 +1,30 @@
 """Core translation pipeline used by the web API."""
 from __future__ import annotations
 
+import os
+import tempfile
+from pathlib import Path
+from typing import Dict, Optional, Tuple, List
+
+import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
 import ctranslate2
 import numpy as np
+import pyttsx3
+import soundfile as sf
 from faster_whisper import WhisperModel
 from transformers import AutoTokenizer
 
-from .config import TRANSLATION_MODEL_DIR, TRANSLATION_MODEL_ID, WHISPER_MODEL
+from .config import (
+    TRANSLATION_MODEL_DIR,
+    TRANSLATION_MODEL_ID,
+    WHISPER_MODEL,
+    XTTS_DEFAULT_SPEAKER_DIR,
+)
 from .languages import DEFAULT_SOURCE_LANG, LANGUAGE_CONFIG
+from .xtts_adapter import get_xtts_adapter
 
 try:
     from kokoro import KPipeline
@@ -48,12 +62,24 @@ class TranslationPipeline:
             raise ValueError(f"Unsupported language: {target_language}")
 
         self.lang_key = target_language
+        self.logger = logging.getLogger(__name__)
         self.lang_config = LANGUAGE_CONFIG[target_language]
         self.model_dir = _ensure_translation_model()
         self.tokenizer = AutoTokenizer.from_pretrained(TRANSLATION_MODEL_ID, use_fast=False)
         self.source_lang = self.lang_config.get("source_lang_code", DEFAULT_SOURCE_LANG)
         self.target_token = self._resolve_target_token(self.lang_config["translation_token"], self.tokenizer)
         self.device = _device_for_translation()
+        self.xtts_language = self.lang_config.get("xtts_language")
+        self.xtts_reference: Optional[Path] = None
+        configured_reference = self.lang_config.get("xtts_reference")
+        if configured_reference:
+            candidate = Path(configured_reference).expanduser().resolve()
+            if candidate.exists():
+                self.xtts_reference = candidate
+        elif XTTS_DEFAULT_SPEAKER_DIR and self.xtts_language:
+            candidate = (XTTS_DEFAULT_SPEAKER_DIR / f"{self.xtts_language}.wav").resolve()
+            if candidate.exists():
+                self.xtts_reference = candidate
 
         self.tokenizer.src_lang = self.source_lang
         if hasattr(self.tokenizer, "tgt_lang"):
@@ -72,6 +98,9 @@ class TranslationPipeline:
         self.kokoro: Optional[KPipeline] = None
         self.kokoro_voice = self.lang_config.get("kokoro_voice", "af_heart")
         self.kokoro_sample_rate = 24000
+        self.pyttsx3_voice_hint = self.lang_config.get("pyttsx3_voice_hint")
+        self.pyttsx3_rate = self.lang_config.get("pyttsx3_rate", 190)
+        self.logger = logging.getLogger(__name__)
         if KPipeline is not None:
             try:
                 self.kokoro = KPipeline(lang_code=self.lang_config.get("kokoro_lang", "en"))
@@ -115,18 +144,97 @@ class TranslationPipeline:
         ]
         return self.tokenizer.convert_tokens_to_string(filtered).strip()
 
-    def tts(self, text: str, voice: Optional[str] = None) -> Tuple[np.ndarray, int]:
-        if self.kokoro is None:
-            raise RuntimeError("Kokoro TTS is not installed. Install `kokoro` to enable speech synthesis.")
-        generator = self.kokoro(text, voice=voice or self.kokoro_voice)
+    def tts(
+        self,
+        text: str,
+        voice: Optional[str] = None,
+        speaker_sample: Optional[bytes] = None,
+    ) -> Tuple[np.ndarray, int]:
+        xtts = get_xtts_adapter()
+        if speaker_sample and not xtts:
+            raise RuntimeError("XTTS is not available to process microphone samples.")
+        if xtts and self.xtts_language and (speaker_sample or self.xtts_reference):
+            try:
+                audio, rate = xtts.synthesize(
+                    text=text,
+                    language=self.xtts_language,
+                    speaker_sample=speaker_sample,
+                    default_sample=self.xtts_reference,
+                )
+                if audio.size:
+                    return self._normalise(audio), rate
+            except Exception:
+                self.logger.exception("XTTS synthesis failed")
+                if speaker_sample:
+                    raise RuntimeError("XTTS synthesis failed for provided speaker sample.")
+
+        if self.kokoro is not None:
+            try:
+                generator = self.kokoro(text, voice=voice or self.kokoro_voice)
+                chunks: list[np.ndarray] = []
+                for _, _, audio in generator:
+                    chunk = np.asarray(audio, dtype=np.float32)
+                    if chunk.ndim > 1:
+                        chunk = chunk.mean(axis=0)
+                    if chunk.size:
+                        chunks.append(chunk)
+                if chunks:
+                    waveform = np.concatenate(chunks)
+                    if waveform.ndim > 1:
+                        waveform = waveform.mean(axis=0)
+                    duration = waveform.size / float(self.kokoro_sample_rate)
+                    energy = float(np.max(np.abs(waveform))) if waveform.size else 0.0
+                    if duration >= 0.8 and energy > 1e-4:
+                        return self._normalise(waveform), self.kokoro_sample_rate
+            except Exception:
+                # fall back to pyttsx3
+                pass
+
+        fallback = self._tts_with_pyttsx3(text)
+        if fallback is not None:
+            return fallback
+        raise RuntimeError(
+            "Kokoro TTS is not installed or failed, and pyttsx3 fallback was unavailable."
+        )
+
+    def _tts_with_pyttsx3(self, text: str) -> Optional[Tuple[np.ndarray, int]]:
         try:
-            _, _, audio = next(generator)
-        except StopIteration:
-            return np.zeros(0, dtype=np.float32), self.kokoro_sample_rate
-        waveform = np.asarray(audio, dtype=np.float32)
-        if waveform.ndim > 1:
-            waveform = waveform.mean(axis=0)
-        return waveform, self.kokoro_sample_rate
+            engine = pyttsx3.init()
+            engine.setProperty("rate", self.pyttsx3_rate)
+            if self.pyttsx3_voice_hint:
+                voice_hint = self.pyttsx3_voice_hint.lower()
+                for voice in engine.getProperty("voices"):
+                    if voice_hint in voice.name.lower():
+                        engine.setProperty("voice", voice.id)
+                        break
+
+            with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as tmp:
+                tmp_path = tmp.name
+            try:
+                engine.save_to_file(text, tmp_path)
+                engine.runAndWait()
+                engine.stop()
+                data, sample_rate = sf.read(tmp_path, dtype="float32", always_2d=False)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            if data.size == 0:
+                return None
+            return self._normalise(data), sample_rate
+        except Exception:
+            self.logger.exception("pyttsx3 synthesis failed")
+            return None
+
+    @staticmethod
+    def _normalise(audio: np.ndarray) -> np.ndarray:
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        if peak > 1e-4:
+            return (audio / peak).astype(np.float32)
+        return audio.astype(np.float32)
 
 
 class PipelineRegistry:

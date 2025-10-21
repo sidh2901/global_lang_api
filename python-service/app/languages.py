@@ -11,13 +11,17 @@ LANGUAGE_CONFIG = {
         "source_lang_code": "eng_Latn",
         "kokoro_lang": "es",
         "kokoro_voice": "af_heart",
+        "pyttsx3_voice_hint": "spanish",
+        "xtts_language": "es",
     },
     "english": {
         "translation_token": "eng_Latn",
         "display_name": "English",
         "source_lang_code": "spa_Latn",
         "kokoro_lang": "en",
-        "kokoro_voice": "af_bella",
+        "kokoro_voice": "af_heart",
+        "pyttsx3_voice_hint": "english",
+        "xtts_language": "en",
     },
 }
 

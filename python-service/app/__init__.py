@@ -11,8 +11,10 @@ from typing import Optional
 import soundfile as sf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .config import ALLOWED_ORIGINS
 from .languages import DEFAULT_TARGET_LANGUAGE, LANGUAGE_CONFIG
 from .pipeline import pipelines
 
@@ -20,6 +22,15 @@ app = FastAPI(
     title="Global Language Translation Service",
     version="1.0.0",
     description="Speech-to-text, machine translation and optional TTS served via FastAPI.",
+)
+
+allow_all_origins = ALLOWED_ORIGINS == ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if allow_all_origins else ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -117,6 +128,27 @@ def tts(request: TTSRequest) -> StreamingResponse:
     pipeline, lang = _get_pipeline(request.target_language)
     try:
         audio, sample_rate = pipeline.tts(request.text, request.voice)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    if audio.size == 0:
+        raise HTTPException(status_code=500, detail="No audio generated.")
+    buffer = io.BytesIO()
+    sf.write(buffer, audio, sample_rate, format="WAV")
+    buffer.seek(0)
+    headers = {"X-Target-Language": lang}
+    return StreamingResponse(buffer, media_type="audio/wav", headers=headers)
+
+
+@app.post("/tts/clone")
+async def tts_clone(
+    text: str = Form(...),
+    target_language: str = Form(DEFAULT_TARGET_LANGUAGE),
+    speaker: UploadFile | None = File(default=None),
+) -> StreamingResponse:
+    pipeline, lang = _get_pipeline(target_language)
+    sample_bytes = await speaker.read() if speaker else None
+    try:
+        audio, sample_rate = pipeline.tts(text, speaker_sample=sample_bytes)
     except RuntimeError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     if audio.size == 0:

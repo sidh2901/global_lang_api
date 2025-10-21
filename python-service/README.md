@@ -6,6 +6,9 @@ FastAPI application that exposes a local speech ➝ translation ➝ speech pipel
 - `/transcribe` – uploads audio, returns transcript + translated text.
 - `/translate` – plain text translation.
 - `/tts` – neural text-to-speech when Kokoro is installed.
+- Falls back to pyttsx3 when Kokoro voices are unavailable so English/Spanish
+   speech is always produced offline.
+- `/tts/clone` – XTTS-based cloning endpoint that accepts microphone samples (via multipart form data) to synthesise in English or Spanish. Defaults to built-in voices if no sample provided.
 - `/languages` & `/health` – runtime metadata and readiness probes.
 - Ships with English ↔︎ Spanish translation and TTS presets; extend `app/languages.py` for more locales.
 
@@ -39,6 +42,10 @@ Visit `http://localhost:8000/docs` for the interactive OpenAPI explorer.
    - `WHISPER_MODEL` – Whisper checkpoint (default `small`)
    - `TRANSLATION_MODEL_ID` – Hugging Face model ID (default `facebook/nllb-200-distilled-600M`)
    - `TRANSLATION_MODEL_DIR` – Absolute path to the converted CTranslate2 folder
+   - `ALLOWED_ORIGINS` – Comma-separated list for CORS (default `*`)
+   - `XTTS_MODEL_NAME` – XTTS model identifier (default `tts_models/multilingual/multi-dataset/xtts_v2`)
+   - `XTTS_USE_GPU` – Set to `true` when deploying on a GPU to speed up cloning
+   - `XTTS_DEFAULT_SPEAKER_DIR` – Optional directory of fallback `*.wav` samples (named `{lang}.wav`)
 3. (Optional) If you need Kokoro TTS on Render, append `&& pip install "kokoro==0.7.16"` to the build command or add a separate deploy hook.
 
 > **Note:** Converting the NLLB checkpoint is compute-intensive and can take several minutes during the initial build. Consider attaching a persistent disk and re-using the generated `models/` directory between deploys.

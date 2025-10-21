@@ -1,23 +1,21 @@
 # Global Language Web (Node.js)
 
-Express + Socket.IO server that powers the WebRTC interpreter demo. It serves the static front-end assets from `public/`, brokers signalling between callers and interpreters, and proxies OpenAI APIs for speech/translation features.
+Express + Socket.IO server that powers the WebRTC interpreter demo. It serves the static front-end assets from `public/`, brokers signalling between callers and interpreters, and proxies the Python FastAPI service for speech, translation, and TTS.
 
 ## Getting started
 ```bash
 cd node-app
 npm install
-cp .env.example .env  # add your OPENAI_API_KEY
+cp .env.example .env
 npm run dev
 ```
 
-The app listens on `http://localhost:3000` by default. Open `http://localhost:3000/caller.html` in one browser and `http://localhost:3000/agent.html` in another to test the call flow.
+The app listens on `http://localhost:3000` by default. Open `http://localhost:3000/caller.html` in one browser and `http://localhost:3000/agent.html` in another to test the call flow.  
+Ensure the Python FastAPI service is running (default `http://localhost:8000`) before starting the Node server.
 
-### Switching between OpenAI and the local Python service
-- `TRANSLATOR_MODE=openai` (default) calls OpenAI Whisper/Chat/TTS APIs. Requires `OPENAI_API_KEY`.
-- `TRANSLATOR_MODE=local` proxies `/api/stt`, `/api/translate`, and `/api/tts` to the Python FastAPI service (default URL `http://localhost:8000`).  
-  Optionally override the target with `LOCAL_TRANSLATOR_URL`.
-
-When running in `local` mode you can omit the OpenAI API key entirely.
+### Configuration
+- `TRANSLATOR_MODE=local` – use the Python APIs (recommended/default).
+- `LOCAL_TRANSLATOR_URL=http://localhost:8000` – override if FastAPI is deployed elsewhere.
 
 ## Render deployment
 - **Environment**: Node
@@ -25,7 +23,8 @@ When running in `local` mode you can omit the OpenAI API key entirely.
 - **Start Command**: `npm start`
 
 Set the following environment variables on Render:
-- `OPENAI_API_KEY` – required for transcription/translation/tts routes
+- `TRANSLATOR_MODE=local`
+- `LOCAL_TRANSLATOR_URL=https://your-python-service.onrender.com`
 - (Optional) `PORT` – Render injects this automatically
 
 ## Repository layout
