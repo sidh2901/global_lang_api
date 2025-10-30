@@ -192,6 +192,96 @@ class TranslationEngine {
     ];
   }
 
+  static async getConfig() {
+    if (!TranslationEngine.configPromise) {
+      TranslationEngine.configPromise = fetch('/api/config')
+        .then((response) => {
+          if (!response.ok) {
+            return { translatorMode: 'local' };
+          }
+          return response.json();
+        })
+        .catch((error) => {
+          console.warn('[TranslationEngine] Failed to load config:', error);
+          return { translatorMode: 'local' };
+        });
+    }
+    return TranslationEngine.configPromise;
+  }
+
+  static getAudioContext() {
+    if (!TranslationEngine.audioContext) {
+      TranslationEngine.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return TranslationEngine.audioContext;
+  }
+
+  static encodeWav(audioBuffer) {
+    const numChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const format = 1; // PCM
+    const bitsPerSample = 16;
+    const bytesPerSample = bitsPerSample / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const dataLength = audioBuffer.length * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataLength);
+    const view = new DataView(buffer);
+
+    let offset = 0;
+
+    function writeString(str) {
+      for (let i = 0; i < str.length; i += 1) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+      offset += str.length;
+    }
+
+    writeString('RIFF');
+    view.setUint32(offset, 36 + dataLength, true);
+    offset += 4;
+    writeString('WAVE');
+    writeString('fmt ');
+    view.setUint32(offset, 16, true);
+    offset += 4;
+    view.setUint16(offset, format, true);
+    offset += 2;
+    view.setUint16(offset, numChannels, true);
+    offset += 2;
+    view.setUint32(offset, sampleRate, true);
+    offset += 4;
+    view.setUint32(offset, sampleRate * blockAlign, true);
+    offset += 4;
+    view.setUint16(offset, blockAlign, true);
+    offset += 2;
+    view.setUint16(offset, bitsPerSample, true);
+    offset += 2;
+    writeString('data');
+    view.setUint32(offset, dataLength, true);
+    offset += 4;
+
+    const interleaved = new Int16Array(dataLength / bytesPerSample);
+    const channels = [];
+    for (let i = 0; i < numChannels; i += 1) {
+      channels.push(audioBuffer.getChannelData(i));
+    }
+
+    let idx = 0;
+    for (let i = 0; i < audioBuffer.length; i += 1) {
+      for (let channel = 0; channel < numChannels; channel += 1) {
+        const sample = Math.max(-1, Math.min(1, channels[channel][i]));
+        interleaved[idx] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        idx += 1;
+      }
+    }
+
+    const bytes = new Uint8Array(interleaved.buffer);
+    for (let i = 0; i < bytes.length; i += 1) {
+      view.setUint8(offset + i, bytes[i]);
+    }
+
+    return buffer;
+  }
+
   async transcribe(audioBlob) {
     try {
       const formData = new FormData();
@@ -223,18 +313,34 @@ class TranslationEngine {
 
   getLanguageCode(language) {
     const languageMap = {
-      'English': 'en',
-      'Spanish': 'es',
-      'French': 'fr',
-      'German': 'de',
-      'Italian': 'it',
-      'Portuguese': 'pt',
-      'Russian': 'ru',
-      'Japanese': 'ja',
-      'Korean': 'ko',
-      'Chinese': 'zh',
-      'Arabic': 'ar',
-      'Hindi': 'hi'
+      English: 'en',
+      Spanish: 'es',
+      French: 'fr',
+      German: 'de',
+      Italian: 'it',
+      Portuguese: 'pt',
+      Russian: 'ru',
+      Japanese: 'ja',
+      Korean: 'ko',
+      Chinese: 'zh',
+      Arabic: 'ar',
+      Hindi: 'hi',
+      Telugu: 'te',
+      Marathi: 'mr',
+      Tamil: 'ta',
+      Kannada: 'kn',
+      Bengali: 'bn',
+      Gujarati: 'gu',
+      Malayalam: 'ml',
+      Punjabi: 'pa',
+      Urdu: 'ur',
+      Thai: 'th',
+      Vietnamese: 'vi',
+      Indonesian: 'id',
+      Filipino: 'fil',
+      Tagalog: 'tl',
+      Turkish: 'tr',
+      Swahili: 'sw'
     };
     return languageMap[language] || 'en';
   }
@@ -282,7 +388,6 @@ class TranslationEngine {
   async processOutgoingAudio(audioBlob) {
     console.log('[TranslationEngine] Processing audio, enabled:', this.enableTranslation, 'myLang:', this.myLanguage, 'remoteLang:', this.remoteLanguage);
     this.logToScreen('⏳ Received audio blob (' + audioBlob.size + ' bytes)', 'info');
-    let record = null;
 
     if (!this.enableTranslation || this.myLanguage === this.remoteLanguage) {
       console.log('[TranslationEngine] Translation skipped - disabled or same language');
@@ -300,6 +405,28 @@ class TranslationEngine {
     this.isProcessing = true;
 
     try {
+      const config = await TranslationEngine.getConfig();
+      const translatorMode = (config?.translatorMode || 'local').toLowerCase();
+
+      if (translatorMode === 'remote') {
+        return await this.processOutgoingAudioRemote(audioBlob);
+      }
+
+      return await this.processOutgoingAudioLocal(audioBlob);
+    } catch (error) {
+      console.error('[TranslationEngine] Error processing outgoing audio:', error);
+      this.logToScreen('❌ Error: ' + (error?.message || 'processing_error'), 'error');
+      return { original: '', translated: '', audioBlob: null };
+    } finally {
+      this.isProcessing = false;
+      this.processNextInQueue();
+    }
+  }
+
+  async processOutgoingAudioLocal(audioBlob) {
+    let record = null;
+
+    try {
       console.log('[TranslationEngine] Step 1: Transcribing audio...');
       this.logToScreen('🎤 Processing audio...', 'info');
       const transcribed = await this.transcribe(audioBlob);
@@ -307,52 +434,7 @@ class TranslationEngine {
       record = this.createTranscriptionRecord(transcribed);
       this.logToScreen('📝 Transcribed (saved #' + record.id + '): ' + transcribed, 'transcription');
 
-      if (!record.normalizedText) {
-        console.log('[TranslationEngine] No transcription received');
-        this.updateTranscriptionRecord(record, { status: 'discarded', reason: 'empty' });
-        this.logToScreen('⚠️ No speech detected in audio (saved #' + record.id + ')', 'warning');
-        this.isProcessing = false;
-        this.processNextInQueue();
-        return { original: '', translated: '', audioBlob: null };
-      }
-
-      const normalizedText = record.normalizedText;
-
-      if (this.isTranscriptionArtifact(normalizedText)) {
-        console.log('[TranslationEngine] Transcription artifact detected, skipping:', transcribed);
-        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'artifact' });
-        this.logToScreen('⚠️ FILTERED (Artifact, saved #' + record.id + '): ' + transcribed, 'warning');
-        this.isProcessing = false;
-        this.processNextInQueue();
-        return { original: '', translated: '', audioBlob: null };
-      }
-
-      if (this.containsMediaContent(normalizedText)) {
-        console.log('[TranslationEngine] Media/broadcast content detected, skipping:', transcribed);
-        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'media_content' });
-        this.logToScreen('⚠️ FILTERED (Media Content, saved #' + record.id + '): ' + transcribed, 'warning');
-        this.isProcessing = false;
-        this.processNextInQueue();
-        return { original: '', translated: '', audioBlob: null };
-      }
-
-      const fillerWords = ['um', 'uh', 'hmm', 'ah', 'er'];
-
-      if (fillerWords.some(filler => normalizedText === filler) || normalizedText.length < 2) {
-        console.log('[TranslationEngine] Filler word or very short text detected, skipping');
-        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'short_or_filler' });
-        this.logToScreen('⚠️ FILTERED (Too Short/Filler, saved #' + record.id + '): ' + transcribed, 'warning');
-        this.isProcessing = false;
-        this.processNextInQueue();
-        return { original: '', translated: '', audioBlob: null };
-      }
-
-      if (this.isDuplicateOrRecent(normalizedText)) {
-        console.log('[TranslationEngine] Duplicate or recently processed text, skipping');
-        this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'duplicate' });
-        this.logToScreen('⚠️ FILTERED (Duplicate, saved #' + record.id + '): ' + transcribed, 'warning');
-        this.isProcessing = false;
-        this.processNextInQueue();
+      if (this.shouldSkipRecord(record, transcribed)) {
         return { original: '', translated: '', audioBlob: null };
       }
 
@@ -387,22 +469,258 @@ class TranslationEngine {
         voice: this.voiceId
       });
 
+      const normalizedText = record.normalizedText;
       this.lastProcessedText = transcribed;
       this.lastProcessTime = Date.now();
       this.addToRecentTranscriptions(normalizedText);
-      this.isProcessing = false;
-      this.processNextInQueue();
       return { original: transcribed, translated, audioBlob: translatedAudioBlob };
     } catch (error) {
-      console.error('[TranslationEngine] Error processing outgoing audio:', error);
       if (record) {
         this.updateTranscriptionRecord(record, { status: 'error', reason: error.message || 'processing_error' });
       }
-      this.logToScreen('❌ Error: ' + error.message, 'error');
-      this.isProcessing = false;
-      this.processNextInQueue();
-      return { original: '', translated: '', audioBlob: null };
+      throw error;
     }
+  }
+
+  async processOutgoingAudioRemote(audioBlob) {
+    const sourceLangCode = this.getLanguageCode(this.myLanguage);
+    const targetLangCode = this.getLanguageCode(this.remoteLanguage);
+    let record = null;
+
+    try {
+      const wavBlob = await this.prepareWavForRemote(audioBlob);
+
+      console.log('[TranslationEngine] Remote pipeline engaged:', sourceLangCode, '->', targetLangCode);
+      this.logToScreen('🌐 Sending audio to remote translator...', 'info');
+
+      const formData = new FormData();
+      formData.append('audio', wavBlob, 'audio.wav');
+      formData.append('sourceLang', sourceLangCode);
+      formData.append('targetLang', targetLangCode);
+
+      const response = await fetch('/api/remote/translate-audio', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const clone = response.clone();
+        let detail = 'Remote translation failed';
+        try {
+          const errPayload = await clone.json();
+          detail = errPayload?.error || errPayload?.detail || detail;
+        } catch {
+          try {
+            detail = await clone.text();
+          } catch {
+            // ignore
+          }
+        }
+        throw new Error(detail);
+      }
+
+      const data = await response.json();
+      const original = data.text || '';
+      const translated = data.translated || '';
+
+      if (!original && (data.reason === 'no_speech_detected' || data.reason === 'no_speech')) {
+        this.logToScreen('⚠️ No speech detected in audio (remote)', 'warning');
+        return { original: '', translated: '', audioBlob: null };
+      }
+
+      record = this.createTranscriptionRecord(original);
+      this.logToScreen('📝 Transcribed (remote #' + record.id + '): ' + original, 'transcription');
+
+      if (this.shouldSkipRecord(record, original)) {
+        return { original: '', translated: '', audioBlob: null };
+      }
+
+      this.updateTranscriptionRecord(record, {
+        status: 'translated',
+        translatedText: translated,
+        voice: this.voiceId,
+        mode: 'remote'
+      });
+
+      if (translated) {
+        this.logToScreen('✅ Translated: ' + translated, 'translation');
+      } else {
+        this.logToScreen('⚠️ Remote translation returned no text', 'warning');
+      }
+
+      let translatedAudioBlob = null;
+      if (data.audioBase64) {
+        translatedAudioBlob = this.base64ToBlob(data.audioBase64, data.contentType || 'audio/wav');
+        if (translatedAudioBlob) {
+          this.logToScreen('✅ Audio ready for playback', 'success');
+        } else {
+          this.logToScreen('⚠️ Failed to decode remote audio', 'warning');
+        }
+      }
+
+      this.updateTranscriptionRecord(record, {
+        audioGenerated: !!translatedAudioBlob,
+        completedAt: new Date().toISOString(),
+        voice: this.voiceId,
+        mode: 'remote'
+      });
+
+      const normalizedText = record.normalizedText;
+      this.lastProcessedText = original;
+      this.lastProcessTime = Date.now();
+      this.addToRecentTranscriptions(normalizedText);
+      return { original, translated, audioBlob: translatedAudioBlob };
+    } catch (error) {
+      if (record) {
+        this.updateTranscriptionRecord(record, { status: 'error', reason: error.message || 'processing_error' });
+      }
+      throw error;
+    }
+  }
+
+  async prepareWavForRemote(blob) {
+    try {
+      return await this.convertBlobToWav(blob);
+    } catch (conversionError) {
+      console.error('[TranslationEngine] Remote WAV conversion failed:', conversionError);
+      this.logToScreen('⚠️ Failed to prepare audio for remote translator: ' + (conversionError?.message || conversionError), 'warning');
+      throw new Error('Remote translator requires WAV audio but conversion failed.');
+    }
+  }
+
+  async convertBlobToWav(blob, targetSampleRate = 16000) {
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioContext = TranslationEngine.getAudioContext();
+
+    if (audioContext.state === 'suspended') {
+      try {
+        await audioContext.resume();
+      } catch (resumeError) {
+        console.warn('[TranslationEngine] Failed to resume AudioContext:', resumeError);
+      }
+    }
+
+    const decodedBuffer = await new Promise((resolve, reject) => {
+      const cloned = arrayBuffer.slice(0);
+      const result = audioContext.decodeAudioData(cloned, resolve, reject);
+      if (result && typeof result.then === 'function') {
+        result.then(resolve).catch(reject);
+      }
+    });
+    let renderBuffer = decodedBuffer;
+
+    if (decodedBuffer.sampleRate !== targetSampleRate) {
+      const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!OfflineContext) {
+        throw new Error('Browser does not support OfflineAudioContext for WAV conversion.');
+      }
+      const frameCount = Math.ceil(decodedBuffer.duration * targetSampleRate);
+      const offlineContext = new OfflineContext(decodedBuffer.numberOfChannels, frameCount, targetSampleRate);
+      const source = offlineContext.createBufferSource();
+      source.buffer = decodedBuffer;
+      source.connect(offlineContext.destination);
+      source.start(0);
+      renderBuffer = await offlineContext.startRendering();
+    }
+
+    if (renderBuffer.numberOfChannels > 1) {
+      let monoBuffer = null;
+      const bufferOptions = {
+        length: renderBuffer.length,
+        numberOfChannels: 1,
+        sampleRate: renderBuffer.sampleRate,
+      };
+
+      if (typeof AudioBuffer === 'function') {
+        try {
+          monoBuffer = new AudioBuffer(bufferOptions);
+        } catch {
+          monoBuffer = null;
+        }
+      }
+
+      if (!monoBuffer && typeof audioContext.createBuffer === 'function') {
+        monoBuffer = audioContext.createBuffer(
+          bufferOptions.numberOfChannels,
+          bufferOptions.length,
+          bufferOptions.sampleRate
+        );
+      }
+
+      if (!monoBuffer) {
+        throw new Error('Unable to create mono AudioBuffer for WAV encoding.');
+      }
+
+      const monoData = monoBuffer.getChannelData(0);
+      const channels = [];
+
+      for (let ch = 0; ch < renderBuffer.numberOfChannels; ch += 1) {
+        channels.push(renderBuffer.getChannelData(ch));
+      }
+
+      for (let i = 0; i < renderBuffer.length; i += 1) {
+        let sum = 0;
+        for (let ch = 0; ch < channels.length; ch += 1) {
+          sum += channels[ch][i];
+        }
+        monoData[i] = sum / channels.length;
+      }
+
+      renderBuffer = monoBuffer;
+    }
+
+    const wavArrayBuffer = TranslationEngine.encodeWav(renderBuffer);
+    return new Blob([wavArrayBuffer], { type: 'audio/wav' });
+  }
+
+  base64ToBlob(base64, contentType = 'application/octet-stream') {
+    try {
+      const byteArray = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      return new Blob([byteArray], { type: contentType });
+    } catch (error) {
+      console.error('Failed to decode base64 audio:', error);
+      return null;
+    }
+  }
+
+  shouldSkipRecord(record, originalText) {
+    if (!record) return true;
+
+    const normalizedText = record.normalizedText;
+    const displayText = typeof originalText === 'string' ? originalText : '';
+    const fillerWords = ['um', 'uh', 'hmm', 'ah', 'er'];
+
+    if (!normalizedText) {
+      this.updateTranscriptionRecord(record, { status: 'discarded', reason: 'empty' });
+      this.logToScreen('⚠️ No speech detected in audio (saved #' + record.id + ')', 'warning');
+      return true;
+    }
+
+    if (this.isTranscriptionArtifact(normalizedText)) {
+      this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'artifact' });
+      this.logToScreen('⚠️ FILTERED (Artifact, saved #' + record.id + '): ' + displayText, 'warning');
+      return true;
+    }
+
+    if (this.containsMediaContent(normalizedText)) {
+      this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'media_content' });
+      this.logToScreen('⚠️ FILTERED (Media Content, saved #' + record.id + '): ' + displayText, 'warning');
+      return true;
+    }
+
+    if (fillerWords.some((filler) => normalizedText === filler) || normalizedText.length < 2) {
+      this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'short_or_filler' });
+      this.logToScreen('⚠️ FILTERED (Too Short/Filler, saved #' + record.id + '): ' + displayText, 'warning');
+      return true;
+    }
+
+    if (this.isDuplicateOrRecent(normalizedText)) {
+      this.updateTranscriptionRecord(record, { status: 'filtered', reason: 'duplicate' });
+      this.logToScreen('⚠️ FILTERED (Duplicate, saved #' + record.id + '): ' + displayText, 'warning');
+      return true;
+    }
+
+    return false;
   }
 
   createTranscriptionRecord(text) {
@@ -573,5 +891,8 @@ class TranslationEngine {
     logDiv.scrollTop = logDiv.scrollHeight;
   }
 }
+
+TranslationEngine.configPromise = null;
+TranslationEngine.audioContext = null;
 
 export { AudioProcessor, TranslationEngine };

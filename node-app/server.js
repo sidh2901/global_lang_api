@@ -11,7 +11,9 @@ const io = new Server(http, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3000;
 const TRANSLATOR_MODE = (process.env.TRANSLATOR_MODE || 'local').toLowerCase();
 const USE_LOCAL_TRANSLATOR = TRANSLATOR_MODE === 'local';
+const USE_REMOTE_TRANSLATOR = TRANSLATOR_MODE === 'remote';
 const LOCAL_TRANSLATOR_URL = process.env.LOCAL_TRANSLATOR_URL || 'http://localhost:8000';
+const REMOTE_TRANSLATOR_URL = process.env.REMOTE_TRANSLATOR_URL || 'https://speech-to-speech-translator-qxbr.onrender.com';
 const upload = multer({ storage: multer.memoryStorage() });
 
 class LocalServiceError extends Error {
@@ -42,6 +44,38 @@ async function fetchLocal(pathname, init) {
   return response;
 }
 
+class RemoteServiceError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function fetchRemote(pathname, init) {
+  const url = new URL(pathname, REMOTE_TRANSLATOR_URL).toString();
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    let errorDetail = `${response.status} ${response.statusText}`;
+    const clone = response.clone();
+    try {
+      const data = await clone.json();
+      if (data?.detail) {
+        errorDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+      } else {
+        errorDetail = typeof data === 'string' ? data : JSON.stringify(data);
+      }
+    } catch {
+      try {
+        errorDetail = await response.text();
+      } catch {
+        // ignore
+      }
+    }
+    throw new RemoteServiceError(response.status, errorDetail);
+  }
+  return response;
+}
+
 function fileFromUpload(upload, fallbackName) {
   const filename = upload.originalname || fallbackName || 'audio.webm';
   const mimetype = upload.mimetype || 'application/octet-stream';
@@ -56,6 +90,14 @@ app.use(express.json());
 // Landing screen to choose console role
 app.get('/', (_req, res) => {
   res.sendFile(path.resolve(__dirname, 'public', 'index.html'));
+});
+
+app.get('/api/config', (_req, res) => {
+  res.json({
+    translatorMode: TRANSLATOR_MODE,
+    localTranslatorUrl: USE_LOCAL_TRANSLATOR ? LOCAL_TRANSLATOR_URL : null,
+    remoteTranslatorUrl: USE_REMOTE_TRANSLATOR ? REMOTE_TRANSLATOR_URL : null,
+  });
 });
 
 // In-memory agent registry: { socketId: { name, available, busy } }
@@ -206,6 +248,87 @@ app.post('/api/tts', async (req, res) => {
     }
     console.error('TTS error:', err?.message || err);
     res.status(500).json({ error: 'TTS failed' });
+  }
+});
+
+function decodeHeaderToText(value) {
+  if (!value) return '';
+  try {
+    return Buffer.from(value, 'base64').toString('utf8');
+  } catch (err) {
+    console.warn('Failed to decode header text:', err?.message || err);
+    return '';
+  }
+}
+
+app.post('/api/remote/translate-audio', upload.single('audio'), async (req, res) => {
+  let sourceLang = '';
+  let targetLang = '';
+  try {
+    if (!USE_REMOTE_TRANSLATOR) {
+      return res.status(501).json({ error: 'Remote translator disabled.' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No audio file provided' });
+    }
+
+    sourceLang = (req.body?.sourceLang || '').trim().toLowerCase();
+    targetLang = (req.body?.targetLang || '').trim().toLowerCase();
+
+    if (!sourceLang || !targetLang) {
+      return res.status(400).json({ error: 'Both sourceLang and targetLang are required' });
+    }
+
+    const form = new FormData();
+    form.append('file', fileFromUpload(req.file, 'audio.webm'));
+    form.append('source_lang', sourceLang);
+    form.append('target_lang', targetLang);
+
+    const response = await fetchRemote('/translate-audio/', {
+      method: 'POST',
+      body: form,
+    });
+
+    const arrayBuffer = await response.arrayBuffer();
+    const contentType = response.headers.get('content-type') || 'audio/wav';
+    const recognizedHeader = response.headers.get('x-recognized-text');
+    const translatedHeader = response.headers.get('x-translated-text');
+    const recognizedText = decodeHeaderToText(recognizedHeader);
+    const translatedText = decodeHeaderToText(translatedHeader);
+
+    res.json({
+      text: recognizedText,
+      translated: translatedText,
+      audioBase64: Buffer.from(arrayBuffer).toString('base64'),
+      contentType,
+      mode: 'remote',
+      sourceLang,
+      targetLang,
+    });
+  } catch (err) {
+    if (err instanceof RemoteServiceError || err instanceof Error) {
+      const status = Number(err?.status ?? err?.statusCode ?? 500);
+      const message = String(err?.message ?? 'Remote translator error');
+      const notRecognized = message.toLowerCase().includes('could not be recognized') || status === 204;
+      if (notRecognized) {
+        console.warn('Remote translator returned no speech detected');
+        return res.json({
+          text: '',
+          translated: '',
+          audioBase64: null,
+          contentType: null,
+          mode: 'remote',
+          sourceLang,
+          targetLang,
+          reason: 'no_speech_detected',
+        });
+      }
+      console.error('Remote translation error:', message);
+      return res.status(status || 500).json({ error: message, mode: 'remote' });
+    }
+    console.error('Remote translate-audio error:', err?.message || err);
+    res.status(500).json({ error: 'Remote translate audio failed' });
   }
 });
 

@@ -15,7 +15,9 @@ Ensure the Python FastAPI service is running (default `http://localhost:8000`) b
 
 ### Configuration
 - `TRANSLATOR_MODE=local` – use the Python APIs (recommended/default).
+- `TRANSLATOR_MODE=remote` – proxy the hosted speech-to-speech API defined by `REMOTE_TRANSLATOR_URL`.
 - `LOCAL_TRANSLATOR_URL=http://localhost:8000` – override if FastAPI is deployed elsewhere.
+- `REMOTE_TRANSLATOR_URL=https://speech-to-speech-translator-qxbr.onrender.com` – override if your remote translator lives elsewhere.
 
 ## Render deployment
 - **Environment**: Node
@@ -23,8 +25,9 @@ Ensure the Python FastAPI service is running (default `http://localhost:8000`) b
 - **Start Command**: `npm start`
 
 Set the following environment variables on Render:
-- `TRANSLATOR_MODE=local`
+- `TRANSLATOR_MODE=local` (or `remote` when using the hosted translator)
 - `LOCAL_TRANSLATOR_URL=https://your-python-service.onrender.com`
+- `REMOTE_TRANSLATOR_URL=https://speech-to-speech-translator-qxbr.onrender.com`
 - (Optional) `PORT` – Render injects this automatically
 
 ## Repository layout
