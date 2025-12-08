@@ -4,19 +4,26 @@ class AudioProcessor {
     this.audioChunks = [];
     this.isRecording = false;
     this.recordingInterval = 5000;
-    this.silenceThreshold = -55;
+    this.chunkTimeslice = 750;
+    this.maxChunkDuration = 2400;
+    this.silenceThreshold = -52;
     this.audioContext = null;
     this.analyser = null;
     this.source = null;
     this.silenceDetectionInterval = null;
     this.consecutiveSilenceCount = 0;
-    this.requiredSilenceCount = 15;
+    this.requiredSilenceCount = 6;
     this.isSpeaking = false;
     this.lastSpeechTime = 0;
-    this.debounceDelay = 1200;
-    this.minAudioSize = 3000;
-    this.speechStartThreshold = -48;
+    this.debounceDelay = 450;
+    this.minAudioSize = 1500;
+    this.speechStartThreshold = -50;
     this.hasDetectedSpeech = false;
+    this.currentChunkDuration = 0;
+    this.silenceCheckInterval = 120;
+    this.isFlushing = false;
+    this.isStoppingRecorder = false;
+    this.forceFlush = false;
   }
 
   async startRecording(stream, onChunkReady) {
@@ -25,7 +32,7 @@ class AudioProcessor {
       this.source = this.audioContext.createMediaStreamSource(stream);
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 2048;
-      this.analyser.smoothingTimeConstant = 0.8;
+      this.analyser.smoothingTimeConstant = 0.6;
       this.source.connect(this.analyser);
 
       const options = { mimeType: 'audio/webm' };
@@ -45,6 +52,7 @@ class AudioProcessor {
       this.consecutiveSilenceCount = 0;
       this.isSpeaking = false;
       this.lastSpeechTime = Date.now();
+      this.currentChunkDuration = 0;
 
       this.startSilenceDetection(onChunkReady);
 
@@ -52,41 +60,32 @@ class AudioProcessor {
         if (event.data.size > 0) {
           this.audioChunks.push(event.data);
           console.log('[AudioProcessor] Audio chunk received:', event.data.size, 'bytes');
+          this.currentChunkDuration += this.chunkTimeslice;
+
+          if (this.currentChunkDuration >= this.maxChunkDuration) {
+            const shouldForceFlush = this.hasDetectedSpeech || this.isSpeaking;
+            this.requestFlush(onChunkReady, shouldForceFlush);
+          }
         }
       };
 
       this.mediaRecorder.onstop = async () => {
-        if (this.audioChunks.length > 0) {
-          const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-          console.log('[AudioProcessor] Recording stopped. Total audio size:', audioBlob.size, 'bytes');
-          this.audioChunks = [];
+        const shouldForce = this.forceFlush || this.hasDetectedSpeech;
+        await this.flushRecording(onChunkReady, shouldForce);
+        this.forceFlush = false;
+        this.isStoppingRecorder = false;
 
-          if (audioBlob.size > this.minAudioSize && this.hasDetectedSpeech) {
-            console.log('[AudioProcessor] Processing audio chunk');
-            await onChunkReady(audioBlob);
-            this.hasDetectedSpeech = false;
-          } else {
-            console.log('[AudioProcessor] Audio chunk skipped - size:', audioBlob.size, 'bytes, hadSpeech:', this.hasDetectedSpeech);
-            this.hasDetectedSpeech = false;
+        if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+          this.currentChunkDuration = 0;
+          try {
+            this.mediaRecorder.start(this.chunkTimeslice);
+          } catch (err) {
+            console.error('[AudioProcessor] Failed to restart recorder:', err);
           }
-        }
-
-        if (this.isRecording && this.mediaRecorder.state === 'inactive') {
-          this.mediaRecorder.start();
-          setTimeout(() => {
-            if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-              this.mediaRecorder.stop();
-            }
-          }, this.recordingInterval);
         }
       };
 
-      this.mediaRecorder.start();
-      setTimeout(() => {
-        if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-          this.mediaRecorder.stop();
-        }
-      }, this.recordingInterval);
+      this.mediaRecorder.start(this.chunkTimeslice);
 
     } catch (error) {
       console.error('Error starting recording:', error);
@@ -120,11 +119,18 @@ class AudioProcessor {
         this.isSpeaking = false;
         this.consecutiveSilenceCount = 0;
 
-        if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-          this.mediaRecorder.stop();
-        }
+        this.requestFlush(onChunkReady, true);
       }
-    }, 150);
+
+      const staleBuffered = !this.isSpeaking &&
+        this.hasDetectedSpeech &&
+        this.audioChunks.length > 0 &&
+        currentTime - this.lastSpeechTime >= this.maxChunkDuration;
+
+      if (staleBuffered) {
+        this.requestFlush(onChunkReady, true);
+      }
+    }, this.silenceCheckInterval);
   }
 
   stopRecording() {
@@ -142,7 +148,8 @@ class AudioProcessor {
       this.audioContext.close();
     }
     this.mediaRecorder = null;
-    this.audioChunks = [];
+    this.isFlushing = false;
+    this.currentChunkDuration = 0;
   }
 
   getAudioLevel() {
@@ -156,6 +163,51 @@ class AudioProcessor {
     const db = 20 * Math.log10(average / 255);
 
     return db;
+  }
+
+  async flushRecording(onChunkReady, force = false) {
+    if (this.isFlushing) return;
+    if (!this.audioChunks.length) return;
+
+    this.isFlushing = true;
+    const chunksToProcess = this.audioChunks.splice(0);
+    const mimeType = (this.mediaRecorder && this.mediaRecorder.mimeType) || 'audio/webm';
+    const audioBlob = new Blob(chunksToProcess, { type: mimeType });
+    const shouldProcess = (force || this.hasDetectedSpeech) && audioBlob.size > this.minAudioSize;
+
+    this.currentChunkDuration = 0;
+    const hadSpeech = this.hasDetectedSpeech;
+    this.hasDetectedSpeech = false;
+
+    console.log('[AudioProcessor] Flushing recording. Size:', audioBlob.size, 'force:', force, 'hadSpeech:', hadSpeech);
+
+    try {
+      if (shouldProcess) {
+        await onChunkReady(audioBlob);
+      } else {
+        console.log('[AudioProcessor] Audio chunk skipped during flush - size:', audioBlob.size, 'bytes');
+      }
+    } finally {
+      this.isFlushing = false;
+    }
+  }
+
+  requestFlush(onChunkReady, force = false) {
+    this.forceFlush = this.forceFlush || force;
+    if (this.isStoppingRecorder || !this.mediaRecorder) return;
+    if (this.mediaRecorder.state === 'recording') {
+      this.isStoppingRecorder = true;
+      try {
+        this.mediaRecorder.stop();
+      } catch (err) {
+        console.error('[AudioProcessor] Failed to stop recorder for flush:', err);
+        this.isStoppingRecorder = false;
+      }
+    } else if (this.mediaRecorder.state === 'inactive') {
+      this.flushRecording(onChunkReady, force).catch((err) => {
+        console.error('[AudioProcessor] Error flushing chunk (inactive state):', err);
+      });
+    }
   }
 }
 
@@ -174,6 +226,7 @@ class TranslationEngine {
     this.transcriptionHistory = [];
     this.contextWindowSize = 3;
     this.voiceId = voiceId || 'alloy';
+    this.maxQueueLength = 2;
     this.mediaBlacklist = [
       'otter.ai', 'otter ai', 'transcribed by', 'https://', 'http://',
       'mbc news', 'cnn', 'bbc', 'fox news', 'breaking news', 'live report',
@@ -398,7 +451,14 @@ class TranslationEngine {
     if (this.isProcessing) {
       console.log('[TranslationEngine] Already processing, queuing');
       this.logToScreen('⌛ Queued (processing in progress)', 'info');
-      this.processingQueue.push(audioBlob);
+      if (this.processingQueue.length >= this.maxQueueLength) {
+        const last = this.processingQueue.pop();
+        const merged = last ? new Blob([last, audioBlob], { type: audioBlob.type || (last && last.type) || 'audio/webm' }) : audioBlob;
+        this.processingQueue.push(merged);
+        this.logToScreen('🌀 Merged buffered audio to avoid lag', 'info');
+      } else {
+        this.processingQueue.push(audioBlob);
+      }
       return { original: '', translated: '', audioBlob: null };
     }
 
