@@ -22,8 +22,6 @@ class AudioProcessor {
     this.currentChunkDuration = 0;
     this.silenceCheckInterval = 120;
     this.isFlushing = false;
-    this.isStoppingRecorder = false;
-    this.forceFlush = false;
   }
 
   async startRecording(stream, onChunkReady) {
@@ -35,7 +33,7 @@ class AudioProcessor {
       this.analyser.smoothingTimeConstant = 0.6;
       this.source.connect(this.analyser);
 
-      const options = { mimeType: 'audio/webm' };
+      const options = { mimeType: 'audio/webm;codecs=opus' };
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
         options.mimeType = 'audio/ogg';
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
@@ -64,25 +62,16 @@ class AudioProcessor {
 
           if (this.currentChunkDuration >= this.maxChunkDuration) {
             const shouldForceFlush = this.hasDetectedSpeech || this.isSpeaking;
-            this.requestFlush(onChunkReady, shouldForceFlush);
+            this.flushRecording(onChunkReady, shouldForceFlush).catch((err) => {
+              console.error('[AudioProcessor] Error flushing chunk (max duration):', err);
+            });
           }
         }
       };
 
       this.mediaRecorder.onstop = async () => {
-        const shouldForce = this.forceFlush || this.hasDetectedSpeech;
+        const shouldForce = this.hasDetectedSpeech;
         await this.flushRecording(onChunkReady, shouldForce);
-        this.forceFlush = false;
-        this.isStoppingRecorder = false;
-
-        if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-          this.currentChunkDuration = 0;
-          try {
-            this.mediaRecorder.start(this.chunkTimeslice);
-          } catch (err) {
-            console.error('[AudioProcessor] Failed to restart recorder:', err);
-          }
-        }
       };
 
       this.mediaRecorder.start(this.chunkTimeslice);
@@ -119,7 +108,9 @@ class AudioProcessor {
         this.isSpeaking = false;
         this.consecutiveSilenceCount = 0;
 
-        this.requestFlush(onChunkReady, true);
+        this.flushRecording(onChunkReady, true).catch((err) => {
+          console.error('[AudioProcessor] Error flushing chunk (silence):', err);
+        });
       }
 
       const staleBuffered = !this.isSpeaking &&
@@ -128,7 +119,9 @@ class AudioProcessor {
         currentTime - this.lastSpeechTime >= this.maxChunkDuration;
 
       if (staleBuffered) {
-        this.requestFlush(onChunkReady, true);
+        this.flushRecording(onChunkReady, true).catch((err) => {
+          console.error('[AudioProcessor] Error flushing chunk (stale buffered):', err);
+        });
       }
     }, this.silenceCheckInterval);
   }
@@ -189,24 +182,6 @@ class AudioProcessor {
       }
     } finally {
       this.isFlushing = false;
-    }
-  }
-
-  requestFlush(onChunkReady, force = false) {
-    this.forceFlush = this.forceFlush || force;
-    if (this.isStoppingRecorder || !this.mediaRecorder) return;
-    if (this.mediaRecorder.state === 'recording') {
-      this.isStoppingRecorder = true;
-      try {
-        this.mediaRecorder.stop();
-      } catch (err) {
-        console.error('[AudioProcessor] Failed to stop recorder for flush:', err);
-        this.isStoppingRecorder = false;
-      }
-    } else if (this.mediaRecorder.state === 'inactive') {
-      this.flushRecording(onChunkReady, force).catch((err) => {
-        console.error('[AudioProcessor] Error flushing chunk (inactive state):', err);
-      });
     }
   }
 }
