@@ -492,12 +492,13 @@ wss.on('connection', (ws) => {
   let targetLang = 'en';
   let sampleRate = 16000;
   let isTranslating = false;
+  const minBytes = 32000; // ~1s of 16kHz mono PCM
 
   async function processFrames(force = false) {
     if (isTranslating) return;
     if (!pcmBuffers.length) return;
     const totalSize = pcmBuffers.reduce((sum, b) => sum + b.length, 0);
-    if (!force && totalSize < 3200) return;
+    if (!force && totalSize < minBytes) return;
     const frames = pcmBuffers;
     pcmBuffers = [];
     isTranslating = true;
@@ -519,6 +520,11 @@ wss.on('connection', (ws) => {
       }
     } catch (err) {
       console.error('[ws] translation error:', err?.message || err);
+      const msg = String(err?.message || '').toLowerCase();
+      if (msg.includes('could not be recognized') || msg.includes('no speech')) {
+        // keep the frames and try again with more audio
+        pcmBuffers = frames.concat(pcmBuffers);
+      }
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'error', error: err?.message || 'translation_failed' }));
       }
@@ -549,9 +555,9 @@ wss.on('connection', (ws) => {
 
     pcmBuffers.push(Buffer.from(data));
 
-    // backpressure: cap backlog to reduce lag without losing recent speech
-    if (pcmBuffers.length > 500) {
-      pcmBuffers = pcmBuffers.slice(-500);
+    const totalSize = pcmBuffers.reduce((sum, b) => sum + b.length, 0);
+    if (totalSize >= minBytes) {
+      processFrames().catch((err) => console.error('[ws] immediate flush error', err?.message || err));
     }
   });
 
