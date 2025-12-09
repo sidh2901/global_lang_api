@@ -6,6 +6,7 @@ const multer = require('multer');
 const app = express();
 const http = require('http').createServer(app);
 const { Server } = require('socket.io');
+const WebSocket = require('ws');
 const io = new Server(http, { cors: { origin: '*' } });
 
 const PORT = process.env.PORT || 3000;
@@ -15,6 +16,60 @@ const USE_REMOTE_TRANSLATOR = TRANSLATOR_MODE === 'remote';
 const LOCAL_TRANSLATOR_URL = process.env.LOCAL_TRANSLATOR_URL || 'http://localhost:8000';
 const REMOTE_TRANSLATOR_URL = process.env.REMOTE_TRANSLATOR_URL || 'https://speech-to-speech-translator-qxbr.onrender.com';
 const upload = multer({ storage: multer.memoryStorage() });
+const wss = new WebSocket.Server({ server: http, path: '/audio-stream' });
+
+function pcmBuffersToWav(buffers, sampleRate = 16000, numChannels = 1) {
+  const pcmData = Buffer.concat(buffers);
+  const byteRate = sampleRate * numChannels * 2;
+  const blockAlign = numChannels * 2;
+  const dataSize = pcmData.length;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16); // Subchunk1Size (PCM)
+  buffer.writeUInt16LE(1, 20); // AudioFormat (PCM)
+  buffer.writeUInt16LE(numChannels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(16, 34); // BitsPerSample
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  pcmData.copy(buffer, 44);
+  return buffer;
+}
+
+async function translatePcmChunk({ pcmBuffers, sourceLang, targetLang, sampleRate = 16000 }) {
+  if (!USE_REMOTE_TRANSLATOR) {
+    return { text: '', translated: '', audioBase64: null, contentType: null };
+  }
+  const wavBuffer = pcmBuffersToWav(pcmBuffers, sampleRate, 1);
+  const form = new FormData();
+  form.append('file', new File([wavBuffer], 'audio.wav', { type: 'audio/wav' }));
+  form.append('source_lang', sourceLang || 'en');
+  form.append('target_lang', targetLang || 'en');
+
+  const response = await fetchRemote('/translate-audio/', {
+    method: 'POST',
+    body: form,
+  });
+
+  const arrayBuffer = await response.arrayBuffer();
+  const contentType = response.headers.get('content-type') || 'audio/wav';
+  const recognizedHeader = response.headers.get('x-recognized-text');
+  const translatedHeader = response.headers.get('x-translated-text');
+  const recognizedText = decodeHeaderToText(recognizedHeader);
+  const translatedText = decodeHeaderToText(translatedHeader);
+
+  return {
+    text: recognizedText,
+    translated: translatedText,
+    audioBase64: Buffer.from(arrayBuffer).toString('base64'),
+    contentType,
+  };
+}
 
 class LocalServiceError extends Error {
   constructor(status, message) {
@@ -426,6 +481,92 @@ io.on('connection', (socket) => {
     } else {
       console.log('[server] socket disconnected', socket.id);
     }
+  });
+});
+
+// === Raw PCM streaming over WebSocket (experimental) ===
+wss.on('connection', (ws) => {
+  console.log('[ws] audio-stream client connected');
+  let pcmBuffers = [];
+  let sourceLang = 'en';
+  let targetLang = 'en';
+  let sampleRate = 16000;
+  let isTranslating = false;
+
+  async function processFrames(force = false) {
+    if (isTranslating) return;
+    if (!pcmBuffers.length) return;
+    const totalSize = pcmBuffers.reduce((sum, b) => sum + b.length, 0);
+    if (!force && totalSize < 3200) return;
+    const frames = pcmBuffers;
+    pcmBuffers = [];
+    isTranslating = true;
+    try {
+      const result = await translatePcmChunk({ pcmBuffers: frames, sourceLang, targetLang, sampleRate });
+      const payload = JSON.stringify({
+        type: 'translation',
+        original: result.text || '',
+        translated: result.translated || '',
+        hasAudio: !!result.audioBase64,
+        contentType: result.contentType || 'audio/wav'
+      });
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
+        if (result.audioBase64) {
+          const audioBuffer = Buffer.from(result.audioBase64, 'base64');
+          ws.send(audioBuffer);
+        }
+      }
+    } catch (err) {
+      console.error('[ws] translation error:', err?.message || err);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'error', error: err?.message || 'translation_failed' }));
+      }
+    } finally {
+      isTranslating = false;
+    }
+  }
+
+  const flushInterval = setInterval(() => {
+    processFrames().catch((err) => console.error('[ws] flush error', err?.message || err));
+  }, 1000);
+
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'config') {
+          sourceLang = (msg.sourceLang || 'en').toLowerCase();
+          targetLang = (msg.targetLang || 'en').toLowerCase();
+          sampleRate = Number(msg.sampleRate) || 16000;
+          console.log('[ws] config set', sourceLang, '->', targetLang, 'rate:', sampleRate);
+        }
+      } catch (e) {
+        console.warn('[ws] failed to parse message', e);
+      }
+      return;
+    }
+
+    pcmBuffers.push(Buffer.from(data));
+
+    // backpressure: cap backlog to reduce lag without losing recent speech
+    if (pcmBuffers.length > 500) {
+      pcmBuffers = pcmBuffers.slice(-500);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('[ws] audio-stream client disconnected');
+    processFrames(true).catch(() => {});
+    clearInterval(flushInterval);
+    pcmBuffers = [];
+  });
+
+  ws.on('error', (err) => {
+    console.error('[ws] error:', err.message || err);
+    processFrames(true).catch(() => {});
+    clearInterval(flushInterval);
+    pcmBuffers = [];
   });
 });
 

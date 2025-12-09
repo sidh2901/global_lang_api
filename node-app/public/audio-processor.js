@@ -33,16 +33,13 @@ class AudioProcessor {
       this.analyser.smoothingTimeConstant = 0.6;
       this.source.connect(this.analyser);
 
-      const options = { mimeType: 'audio/webm;codecs=opus' };
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        options.mimeType = 'audio/ogg';
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options.mimeType = 'audio/mp4';
-          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options.mimeType = '';
-          }
-        }
-      }
+      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+      const mimeCandidates = isSafari
+        ? ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/ogg']
+        : ['audio/webm;codecs=opus', 'audio/ogg', 'audio/mp4'];
+      const selectedMime = mimeCandidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+      const options = { mimeType: selectedMime };
+      console.log('[AudioProcessor] Using MediaRecorder mime type:', selectedMime || '(browser default)');
 
       this.mediaRecorder = new MediaRecorder(stream, options);
       this.audioChunks = [];
@@ -635,13 +632,19 @@ class TranslationEngine {
       }
     }
 
-    const decodedBuffer = await new Promise((resolve, reject) => {
-      const cloned = arrayBuffer.slice(0);
-      const result = audioContext.decodeAudioData(cloned, resolve, reject);
-      if (result && typeof result.then === 'function') {
-        result.then(resolve).catch(reject);
-      }
-    });
+    let decodedBuffer;
+    try {
+      decodedBuffer = await new Promise((resolve, reject) => {
+        const cloned = arrayBuffer.slice(0);
+        const result = audioContext.decodeAudioData(cloned, resolve, reject);
+        if (result && typeof result.then === 'function') {
+          result.then(resolve).catch(reject);
+        }
+      });
+    } catch (decodeError) {
+      console.error('[TranslationEngine] decodeAudioData failed. Blob type:', blob.type, decodeError);
+      throw new Error('decode_failed_' + (blob.type || 'unknown_codec'));
+    }
     let renderBuffer = decodedBuffer;
 
     if (decodedBuffer.sampleRate !== targetSampleRate) {

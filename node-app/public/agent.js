@@ -1,4 +1,5 @@
 import { AudioProcessor, TranslationEngine } from './audio-processor.js';
+import { PCMStreamer } from './pcm-streamer.js';
 
 const socket = io();
 let pc = null;
@@ -11,6 +12,8 @@ let remoteLanguage = 'English';
 let translatedAudioQueue = [];
 let isPlayingTranslatedAudio = false;
 let preferTranslatedAudioOnly = false;
+let pcmStreamer = null;
+const useStreamingOnly = true;
 
 const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
@@ -263,29 +266,79 @@ acceptBtn.onclick = async () => {
 function startTranslation() {
   if (!localStream || !translationEngine) return;
 
-  audioProcessor = new AudioProcessor();
+  if (!useStreamingOnly) {
+    audioProcessor = new AudioProcessor();
+    audioProcessor.startRecording(localStream, async (audioBlob) => {
+      const { original, translated, audioBlob: translatedAudio } = await translationEngine.processOutgoingAudio(audioBlob);
 
-  audioProcessor.startRecording(localStream, async (audioBlob) => {
-    const { original, translated, audioBlob: translatedAudio } = await translationEngine.processOutgoingAudio(audioBlob);
+      if (translated && currentCallId) {
+        socket.emit('translation:text', {
+          callId: currentCallId,
+          original,
+          translated
+        });
 
-    if (translated && currentCallId) {
-      socket.emit('translation:text', {
-        callId: currentCallId,
-        original,
-        translated
-      });
+        if (translatedAudio) {
+          const arrayBuffer = await translatedAudio.arrayBuffer();
+          socket.emit('translation:audio', {
+            callId: currentCallId,
+            audioData: Array.from(new Uint8Array(arrayBuffer))
+          });
+        }
 
-      if (translatedAudio) {
-        const arrayBuffer = await translatedAudio.arrayBuffer();
+        updateTranslationStatus(`You said: "${original}"`);
+      }
+    });
+  }
+
+  startPcmStream();
+}
+
+function startPcmStream() {
+  if (!localStream || pcmStreamer) return;
+  const myLanguage = agentLanguageSelect.value || 'English';
+  const callerLanguage = remoteLanguage || 'English';
+  pcmStreamer = new PCMStreamer(localStream, {
+    sourceLang: translationEngine.getLanguageCode
+      ? translationEngine.getLanguageCode(myLanguage)
+      : 'en',
+    targetLang: translationEngine.getLanguageCode
+      ? translationEngine.getLanguageCode(callerLanguage)
+      : 'en'
+  });
+  pcmStreamer.onTranslation = ({ original, translated }) => {
+    if (translated) {
+      updateTranslationStatus(`You (stream): "${original}" → "${translated}"`);
+      logToTranscriptionLogs(`🗣️ STREAM: "${original}" → "${translated}"`, 'translation');
+      if (currentCallId) {
+        socket.emit('translation:text', {
+          callId: currentCallId,
+          original,
+          translated
+        });
+      }
+    }
+  };
+  pcmStreamer.onAudio = (blob) => {
+    if (currentCallId && blob) {
+      blob.arrayBuffer().then((arrayBuffer) => {
         socket.emit('translation:audio', {
           callId: currentCallId,
           audioData: Array.from(new Uint8Array(arrayBuffer))
         });
-      }
-
-      updateTranslationStatus(`You said: "${original}"`);
+      }).catch(() => {});
     }
-  });
+    translatedAudioQueue.push(blob);
+    playNextTranslatedAudio();
+  };
+  pcmStreamer.start();
+}
+
+function stopPcmStream() {
+  if (pcmStreamer) {
+    pcmStreamer.stop();
+    pcmStreamer = null;
+  }
 }
 
 function playNextTranslatedAudio() {
@@ -360,6 +413,7 @@ function resetCallState() {
     audioProcessor.stopRecording();
     audioProcessor = null;
   }
+  stopPcmStream();
 
   translationEngine = null;
   updateTranslationStatus('');
